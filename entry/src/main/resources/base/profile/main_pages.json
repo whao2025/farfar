@@ -1,0 +1,12 @@
+{
+  "src": [
+    "pages/Splash",
+    "pages/Home",
+    "pages/PDFViewer",
+    "pages/PDFEditPage",
+    "pages/PDFConvertPage",
+    "pages/BookkeepingConfirmPage",
+    "pages/ManualEntryPage",
+    "pages/ProfilePrivacyPage"
+  ]
+}

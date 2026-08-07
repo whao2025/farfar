@@ -1,0 +1,69 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "release",
+        "type": "HarmonyOS",
+        "material": {
+          "storeFile": "freepdf.p12",
+          "storePassword": "0000001C45934BD8CE9A91C1ED64A6A34B5835382C2AB983C5E15AD02D5B8CEE4A210251361838835F721744",
+          "keyAlias": "freepdf_release",
+          "keyPassword": "0000001CF15F6F722049E848A06C03683AD0E99356D316A2193F60DED2119C3DDF250DDAC19433E6447FD4A5",
+          "signAlg": "SHA256withECDSA",
+          "profile": "freepdf_releaseRelease.p7b",
+          "certpath": "D:\\freepdf\\freepdf_release.cer"
+        }
+      },
+      {
+        "name": "debug",
+        "type": "HarmonyOS",
+        "material": {
+          "storeFile": "D:\\freepdf\\freepdf_debug.p12",
+          "storePassword": "000000204C8EB7E26C7FD2FE2CF2AE92D1A8CAD0802463B022762F15994359FADF87CFAB7E50B21299BA9BF08A89BC42",
+          "keyAlias": "debugkey",
+          "keyPassword": "0000002063A09CE9C2B8C5E064562F27172D5B82741F1FF47506B6214334CCD655E8FE5DB651DF0153DD727058A1F2FD",
+          "signAlg": "SHA256withECDSA",
+          "profile": "D:\\freepdf\\freepdf_debugDebug.p7b",
+          "certpath": "D:\\freepdf\\freepdf_debug.cer"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "debug",
+        "targetSdkVersion": "6.1.1(24)",
+        "compatibleSdkVersion": "6.1.1(24)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug"
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

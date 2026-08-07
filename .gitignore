@@ -1,0 +1,32 @@
+# DevEco Studio / Hvigor
+.hvigor/
+oh_modules/
+hvigor/
+node_modules/
+
+# Build outputs
+entry/build/
+entry/default/
+entry/intermediates/
+entry/cache/
+entry/.hvigor/
+
+# Local dev config (machine-specific)
+local.properties
+
+# DevEco Studio user settings
+.idea/
+.vscode/
+*.iml
+
+# Downloaded SDK / installer (large binary artifacts)
+DevEcoSetup/
+deveco-studio-*.zip
+devecostudio-*.exe
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -1,0 +1,8 @@
+{
+  "modelVersion": "5.0.0",
+  "name": "freepdf",
+  "version": "1.0.0",
+  "description": "freepdf - 纯本地 PDF 阅读器（HarmonyOS NEXT）",
+  "dependencies": {},
+  "devDependencies": {}
+}

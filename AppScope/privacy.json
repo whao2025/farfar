@@ -1,0 +1,42 @@
+{
+  "privacy": {
+    "name": "privacy",
+    "description": "freepdf 隐私政策",
+    "version": "1.0.0",
+    "lastUpdated": "2026-08-03",
+    "privacyPolicyUrl": "",
+    "content": "freepdf 是一款本地 PDF 阅读应用，所有数据处理均在设备端完成。本应用中不收集、不上传任何用户文件或使用数据。应用不申请任何敏感权限，PDF 文件通过系统文件选择器访问，不会获取位置、通讯录、相机、麦克风等权限。",
+    "dataCollection": {
+      "collectsPersonalInfo": false,
+      "collectsDeviceInfo": false,
+      "collectsUsageData": false,
+      "collectsLogData": false,
+      "collectsLocation": false,
+      "collectsContacts": false,
+      "collectsCamera": false,
+      "collectsMicrophone": false
+    },
+    "dataTransmission": {
+      "transmitsData": false,
+      "transmissionContent": "无",
+      "thirdPartySharing": false,
+      "crossBorderTransmission": false
+    },
+    "dataStorage": {
+      "storageLocation": "设备本地",
+      "retentionPeriod": "用户删除应用后数据自动清除",
+      "encryptionAtRest": true
+    },
+    "thirdPartySDKs": [],
+    "userRights": {
+      "deleteData": true,
+      "exportData": true,
+      "revokePermission": true,
+      "accessData": true,
+      "correction": true
+    },
+    "contact": {
+      "email": "whao2025@qq.com"
+    }
+  }
+}
