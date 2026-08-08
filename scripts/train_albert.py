@@ -44,7 +44,10 @@ class BookkeepingDataset(Dataset):
         record = self.records[idx]
         text = record['text']
         category = record['category']
-        label = self.label_ids.get(category, self.label_ids['其他']) if category in self.label_ids else self.label_ids['其他']
+        if category in self.label_ids:
+            label = self.label_ids[category]
+        else:
+            label = self.label_ids.get('其他', 0)
         encoding = self.tokenizer(
             text,
             max_length=self.max_length,

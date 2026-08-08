@@ -40,6 +40,12 @@ tools/
 __pycache__/
 *.pyc
 
+# ML training / conversion artifacts (regenerable; models ship via rawfile)
+models/
+data/train.jsonl
+data/val.jsonl
+data/labels.json
+
 # Signing secrets / local dev artifacts (never commit)
 *.p12
 *.p7b
