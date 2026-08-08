@@ -21,15 +21,12 @@ from transformers import (
     Trainer,
 )
 
+from data_utils import load_records
+
 # Runtime constants (overridable via CLI)
 MAX_LENGTH = 128
 BATCH_SIZE = 16
 LEARNING_RATE = 2e-5
-
-CATEGORIES = [
-    '餐饮', '交通', '购物', '医疗', '娱乐', '居住', '通讯', '其他',
-    '工资', '理财', '其他收入',
-]
 
 
 class BookkeepingDataset(Dataset):
@@ -48,10 +45,6 @@ class BookkeepingDataset(Dataset):
         text = record['text']
         category = record['category']
         label = self.label_ids.get(category, self.label_ids['其他']) if category in self.label_ids else self.label_ids['其他']
-        if category in self.label_ids:
-            label = self.label_ids[category]
-        else:
-            label = self.label_ids['其他']
         encoding = self.tokenizer(
             text,
             max_length=self.max_length,
@@ -64,15 +57,6 @@ class BookkeepingDataset(Dataset):
             'attention_mask': encoding['attention_mask'].squeeze(0),
             'labels': torch.tensor(label, dtype=torch.long),
         }
-
-
-def load_records(path: Path) -> list:
-    with open(path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    # Accept {version, records: [...]} wrapper or bare array
-    if isinstance(data, dict):
-        return data['records']
-    return data
 
 
 def compute_metrics(eval_pred):

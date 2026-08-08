@@ -9,6 +9,9 @@ import random
 from collections import defaultdict
 from pathlib import Path
 import argparse
+import sqlite3
+
+from data_utils import load_records
 
 # Category mappings
 EXPENSE_CATEGORIES = [
@@ -20,26 +23,56 @@ INCOME_CATEGORIES = [
 ALL_CATEGORIES = EXPENSE_CATEGORIES + INCOME_CATEGORIES
 MIN_CATEGORY_COUNT = 20
 
-def load_dataset(input_path: Path):
-    """Load records from JSON (wrapper `{..., records:[...]}`) or JSONL."""
-    raw = input_path.read_text(encoding='utf-8')
-    stripped = raw.lstrip()
-    records = None
-    if stripped.startswith('['):
-        records = json.loads(raw)
-    elif stripped.startswith('{'):
-        data = json.loads(raw)
-        if isinstance(data, dict) and 'records' in data:
-            records = data['records']
-        else:
-            raise ValueError('Unsupported wrapper JSON: missing "records" key')
-    else:
+# Columns in freepdf_accounting.db `records` table (see utils/RecordDatabase.ets)
+DB_COLUMNS = [
+    'id', 'amount', 'type', 'category', 'note', 'merchant', 'timestamp',
+    'dateStr', 'confidence', 'source', 'status', 'createdAt',
+]
+
+def load_from_db(db_path: Path) -> list:
+    """Load CONFIRMED records straight from the app's SQLite database.
+
+    Mirrors DatasetExportUtil.ets semantics: only status=1 (CONFIRMED),
+    empty notes are dropped (no signal for the model), NULLs are coalesced.
+    """
+    if not Path(db_path).exists():
+        raise FileNotFoundError(f'Database not found: {db_path}')
+
+    conn = sqlite3.connect(f'file:{Path(db_path)}?mode=ro', uri=True)
+    try:
+        sql = (
+            f'SELECT {", ".join(DB_COLUMNS)} FROM records '
+            "WHERE status = 1 AND length(trim(note)) > 0 ORDER BY timestamp DESC"
+        )
+        rows = conn.execute(sql).fetchall()
         records = []
-        for line in raw.splitlines():
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    return records
+        for row in rows:
+            row_map = dict(zip(DB_COLUMNS, row))
+            source = row_map.get('source')
+            if source not in ('pdf-text', 'pdf-ocr', 'img-ocr'):
+                source = 'pdf-text'
+            records.append({
+                'id': row_map.get('id'),
+                'text': row_map.get('note') or '',
+                'category': row_map.get('category') or '其他',
+                'type': row_map.get('type') or 'expense',
+                'amount': row_map.get('amount') or 0.0,
+                'merchant': row_map.get('merchant') or '',
+                'source': source,
+                'confidence': row_map.get('confidence') or 0.5,
+                'timestamp': row_map.get('timestamp'),
+                'dateStr': row_map.get('dateStr'),
+            })
+        return records
+    finally:
+        conn.close()
+
+
+def load_dataset(source, from_db: bool = False) -> list:
+    """Load records (JSON/JSONL file via load_records, or straight SQLite)."""
+    if from_db:
+        return load_from_db(source)
+    return load_records(Path(source))
 
 def categorize_record(record: dict) -> str:
     """Categorize a record based on its category field."""
@@ -68,7 +101,10 @@ def create_splits(records: list, train_ratio: float = 0.8, seed: int = 42):
     val_ids = set()
 
     def rec_id(r):
-        return r.get('id')
+        rid = r.get('id')
+        if rid is None:
+            return (r.get('text'), r.get('timestamp'))
+        return rid
 
     for cat in all_categories:
         group = by_category[cat]
@@ -138,27 +174,51 @@ def save_dataset(records: list, output_path: Path, format: str = 'jsonl'):
 
 def main():
     parser = argparse.ArgumentParser(description='Export and prepare training dataset')
-    parser.add_argument('--input', type=str, default='dataset.jsonl',
-                       help='Input JSONL file path')
+    src = parser.add_mutually_exclusive_group()
+    src.add_argument('--input', type=str, default=None,
+                     help='Input JSON/JSONL file path')
+    src.add_argument('--from-db', type=str, default=None, metavar='DB',
+                     help='Read CONFIRMED records directly from the app SQLite database')
     parser.add_argument('--train', type=str, default='data/train.jsonl',
                        help='Output train split path')
     parser.add_argument('--val', type=str, default='data/val.jsonl',
-                       help='Output val split path')
+                        help='Output val split path')
     parser.add_argument('--labels', type=str, default='data/labels.json',
-                       help='Output label mapping path')
+                        help='Output label mapping path')
     parser.add_argument('--train-ratio', type=float, default=0.8,
-                       help='Train split ratio (default: 0.8)')
+                        help='Train split ratio (default: 0.8)')
     parser.add_argument('--seed', type=int, default=42,
-                       help='Random seed for reproducibility')
+                        help='Random seed for reproducibility')
     args = parser.parse_args()
 
-    input_path = Path(args.input)
-    if not input_path.exists():
-        print(f"Error: Input file not found: {input_path}")
-        return
-
-    print(f"Loading records from {input_path}...")
-    records = load_dataset(input_path)
+    if args.from_db:
+        input_path = Path(args.from_db)
+        print(f"Loading records from database {input_path}...")
+        try:
+            records = load_dataset(input_path, from_db=True)
+        except FileNotFoundError as e:
+            print(f"Error: {e}")
+            return
+    else:
+        if args.input is None:
+            candidate = Path('freepdf_accounting.db')
+            if candidate.exists():
+                print(f'No --input/--from-db given; found {candidate}, reading database...')
+                try:
+                    records = load_dataset(candidate, from_db=True)
+                except FileNotFoundError as e:
+                    print(f"Error: {e}")
+                    return
+            else:
+                print('Error: no --input/--from-db provided and no freepdf_accounting.db in cwd')
+                return
+        else:
+            input_path = Path(args.input)
+            if not input_path.exists():
+                print(f'Error: Input file not found: {input_path}')
+                return
+            print(f"Loading records from {input_path}...")
+            records = load_dataset(input_path)
     print(f"Loaded {len(records)} records")
 
     # Print category distribution
@@ -170,6 +230,18 @@ def main():
     print("\nCategory distribution:")
     for cat in sorted(by_category.keys()):
         print(f"  {cat}: {by_category[cat]}")
+
+    # type × category cross distribution (note: '其他' is shared across expense/income)
+    cross = defaultdict(int)
+    for record in records:
+        cross[(record.get('type', 'expense'), categorize_record(record))] += 1
+    print("\nType × category cross distribution:")
+    for type_name in ('expense', 'income'):
+        for cat in sorted(by_category.keys()):
+            count = cross[(type_name, cat)]
+            if count:
+                print(f"  {type_name:8s} {cat}: {count}")
+    print("  Note: '其他' labels collapse across expense/income in model training.")
 
     # Create splits
     print(f"\nCreating train/val splits (train_ratio={args.train_ratio})...")

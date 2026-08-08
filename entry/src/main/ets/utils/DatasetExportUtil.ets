@@ -71,7 +71,7 @@ export class DatasetExportUtil {
           category: resultSet.getString(categoryIdx),
           type: resultSet.getString(typeIdx) as 'expense' | 'income',
           amount: resultSet.getDouble(amountIdx),
-          merchant: merchantValue.trim().length > 0 ? merchantValue : undefined,
+          merchant: merchantValue && merchantValue.trim().length > 0 ? merchantValue : undefined,
           source: resultSet.getString(sourceIdx) as RecordSource,
           timestamp: resultSet.getLong(timestampIdx),
           dateStr: resultSet.getString(dateStrIdx),
@@ -90,6 +90,7 @@ export class DatasetExportUtil {
       exportDate: new Date().toISOString(),
       recordCount: records.length,
       records: records.map(r => ({
+        id: r.id,
         text: r.text,
         category: r.category,
         type: r.type,

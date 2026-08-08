@@ -32,22 +32,23 @@ py -3 -m pip install transformers datasets accelerate
 3. 确保每条记录的 `status = CONFIRMED`
 
 ### 步骤 4：导出数据（5 分钟）
+> ⚠️ 数据库默认 WAL 日志模式：应用运行时部分已确认记录可能仍缓存在 `-wal` 文件里未落盘。直接 pull 主文件会导致静默丢数据。
+
 ```powershell
+# 先强制停止应用，确保 WAL 已合并
+adb shell am force-stop com.freepdf.app
 adb pull /data/app/el2/100/database/com.freepdf.app/rdb/freepdf_accounting.db .
 ```
 
 ### 步骤 5：准备训练数据（10 分钟）
 ```powershell
-# 将数据库文件重命名为 dataset.db
-rename dataset.db dataset.jsonl
-
-# 运行数据准备脚本
-py -3 scripts/export_dataset.py --input dataset.jsonl --train data/train.jsonl --val data/val.jsonl --labels data/labels.json
+# 直接从 SQLite 数据库读取（status=CONFIRMED，过滤空 note）
+py -3 scripts/export_dataset.py --from-db freepdf_accounting.db --train data/train.jsonl --val data/val.jsonl --labels data/labels.json
 ```
 
 **验收标准**：
-- 总记录 ≥800 条
-- 每个分类 ≥20 条
+- 输出显示 type×category 交叉分布
+- 每分类实例数 ≥20（数据量不足时提示建议值）
 - `data/train.jsonl` 和 `data/val.jsonl` 文件已创建
 
 ### 步骤 6：训练模型（30-60 分钟）
@@ -77,7 +78,7 @@ py -3 scripts/convert_to_ms.py
 1. 将以下文件复制到 `entry/src/main/resources/rawfile/`：
    - `models/albert_finetuned.ms`
    - `vocab.txt`（从 `models/albert_finetuned/` 拷贝）
-   - `label_map.json`（从 `models/albert_finetuned/` 拷贝）
+   - `labels.json`（**必须从 `models/albert_finetuned/labels.json` 拷贝**——该文件含 `invLabelMap` 驼峰键，设备端读取；勿拷 `data/labels.json`，那是 snake_case 的中间文件，设备端读不到）
 
 2. 重新编译应用：
 ```powershell
@@ -124,7 +125,7 @@ hvigorw assembleHap
 ## 📊 验收清单
 
 - [ ] Python 环境：PyTorch 2.5.x 安装成功
-- [ ] 数据集：≥800 条记录，每类 ≥20 条
+- [ ] 数据集：每类 ≥20 条（建议），总计建议 ≥800 条
 - [ ] 训练：val 准确率 ≥90%，loss <0.5
 - [ ] 转换：.ms 模型 ≤8 MB
 - [ ] 部署：所有文件已复制到 rawfile/
@@ -150,10 +151,10 @@ pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu1
 **A**: 检查 MindSporeLite 依赖是否正确添加到 build-profile.json5
 
 ### Q4: ML 分类不工作
-**A**: 确保以下文件已复制到 rawfile/：
+**A**: 确保以下文件已复制到 rawfile/（文件名须完全一致）：
 - albert_finetuned.ms
 - vocab.txt
-- label_map.json
+- labels.json（从 `models/albert_finetuned/` 拷贝，非 `data/labels.json`）
 
 ### Q5: 推理速度慢
 **A**: 确保使用 CPU 推理，检查模型大小是否正确
