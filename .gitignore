@@ -30,3 +30,21 @@ Thumbs.db
 
 # Logs
 *.log
+build_err*.txt
+build_log*.txt
+
+# Tools (dashboard, external binaries)
+tools/
+
+# Python
+__pycache__/
+*.pyc
+
+# Signing secrets / local dev artifacts (never commit)
+*.p12
+*.p7b
+*.cer
+*.csr
+
+# App build outputs (signed/unsigned .app packages)
+build/outputs/
