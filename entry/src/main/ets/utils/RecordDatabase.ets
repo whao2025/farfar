@@ -1,6 +1,6 @@
 import { relationalStore } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
-import { BookkeepingRecord, RecordStatus, RecordType } from '../model/RecordModel';
+import { BookkeepingRecord, RecordStatus, RecordType, RecordSource } from '../model/RecordModel';
 
 const DB_NAME = 'freepdf_accounting.db';
 const TABLE_NAME = 'records';
@@ -303,7 +303,7 @@ export class RecordDatabase {
           timestamp: resultSet.getLong(timestampIdx),
           dateStr: resultSet.getString(dateStrIdx),
           confidence: resultSet.getDouble(confidenceIdx),
-          source: resultSet.getString(sourceIdx) as 'pdf-text' | 'pdf-ocr',
+          source: resultSet.getString(sourceIdx) as RecordSource,
           status: resultSet.getLong(statusIdx) as RecordStatus,
           createdAt: resultSet.getLong(createdAtIdx)
         });

@@ -94,9 +94,6 @@ export struct ConvertTab {
         Row({ space: 10 }) {
           GlassButton({ label: 'PDF提取文本', dark: this.dark, heightVp: 44, fontSize: 14, onClickHandler: () => this.openConvert('pdfToText') })
             .layoutWeight(1)
-          GlassButton({ label: '', dark: this.dark, heightVp: 44, fontSize: 14, onClickHandler: () => {} })
-            .layoutWeight(1)
-            .visibility(Visibility.None)
         }
         .width('100%')
       }

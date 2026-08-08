@@ -14,7 +14,7 @@
 - `pages/tabs/`：底部导航四 tab —— EditTab(编辑)/ConvertTab(转化)/BookkeepingTab(记账)/ProfileTab(我的)。
 - `components/`：7 个 —— GlassButton、GlassToolbar、PdfEditToolItem、RecentFilesPanel、AutoRecordConfirm、BookkeepingSummary、DailyBarChart。（⚠️ **无 GlassPanel**）
 - `utils/`：AmountParser、AutoCategorizer、BudgetPreferences、DarkModeStore、ImportLibrary、PDFConvertUtils、PDFEditUtils、PDFImportUtils、PDFOCRUtils、PickerSaveUtils、RecordDatabase。
-- `ocr/`：OCR 服务抽象层 —— `OCRTypes.ets`（OCRResult/OCRPage/TextBlock/TextLine/OCRProgress/OCROptions）、`OCRService.ets`（接口 `recognize(pdfPath,options?,onProgress?)` + 工厂 `createOCRService()`）、`CoreVisionOCR.ets`（`@kit.CoreVisionKit` textRecognition 逐页识别，进度回调/失败重试 MAX_RETRY=2/finally release，块坐标转 PDF 左下原点，fontSize/confidence 为占位默认）。⚠️ CoreVisionOCR 的 TextBlock.fontSize 恒 12、confidence 恒 1（SDK 该版本无这些字段，接口已预留）。
+- `ocr/`：OCR 服务抽象层 —— `OCRTypes.ets`（OCRResult/OCRPage/TextBlock/TextLine/OCRProgress/OCROptions）、`OCRService.ets`（接口 `recognize(pdfPath,options?,onProgress?)` + `configure(context?)` + 工厂 `createOCRService()`）、`CoreVisionOCR.ets`（`@kit.CoreVisionKit` textRecognition 逐页识别，进度回调/失败重试 MAX_RETRY=2/finally release，块坐标转 PDF 左下原点，fontSize/confidence 为占位默认）。⚠️ CoreVisionOCR 的 TextBlock.fontSize 恒 12、confidence 恒 1（SDK 该版本无这些字段，接口已预留）。磁盘缓存：`configure(ctx)` 后按 `filesDir/ocr_cache/<size>_<mtime>_p<start>-<end>.json` 缓存/命中（无 crypto，用 stat size+mtime 指纹）。⚠️ 不做 taskpool 并发——textRecognition 全局单例 + worker 上下文未验证。
 - `pdf/`：PDF 文本回写抽象层 —— `PDFRewriter.ets`（接口 `rewrite(src,out,edits)` + `TextEdit{pageIndex,blockIndex,newText,newSize}` + `RewriteResult`）、`PdfServiceRewriter.ets`（@Concurrent worker：getGraphicsObjects 按序定位第 blockIndex 个 TEXT 对象 → deleteGraphicsObject → 复用 fontInfo 或 'HarmonyOS Sans' 重插 → saveDocument，finally releaseDocument；工厂 `createPDFRewriter()`）。
 - `layout/`：智能排版引擎（纯函数、无副作用、字体匹配结果缓存）—— `FontMatcher.ets`（`FontMatchResult{fontName,fontPath?,similarity,fallback}` + `matchFont(ocrFontName?)`：精确→Levenshtein 模糊(≥0.6)→视觉特征(serif/mono/bold 关键词)→回退 'HarmonyOS Sans'；`FontCache` Map 上限 64 条、满即清）、`ParagraphReconstructor.ets`（`Paragraph{id,text,x,y,width,height,fontSize,fontName?,confidence,blockIds}` + `reconstruct(blocks)`：按 y/x 排序→同行合并(重叠≥0.3 且纵向邻近)→行内按 x 排序+gap 判空格→段几何/平均置信度）、`LayoutEngine.ets`（`LayoutResult{paragraphs,tables,images,pageWidth,pageHeight}` + `reconstructLayout(page)` 纯函数；`matchFonts(page)` 返回 `FontMapEntry[]`；`detectTables` 按 y 行分组+≥3 行+≥2 列；`detectImages` 面积>均值6倍 判图）。
 - `model/`：RecordModel.ets。`theme/`：GlassTokens.ets、Breakpoint.ets。`entryability/`：EntryAbility.ets。
@@ -97,7 +97,7 @@
 - `SM=600`/`MD=840` 断点。方法 `static calcFromPx(px, density): 'sm'|'md'|'lg'`（≥MD→lg、≥SM→md、否则 sm）。供 EntryAbility → `AppStorage('breakpoint')`，tabs 用 `@StorageProp('breakpoint')`。
 
 ## 页面职责注意
-- `Home.ets`：底部四 tab 总容器（无 params）。底部 HdsTabs 用 `barFloatingStyle` + `barOverlap(true)`（悬浮胶囊 Tab，`@kit.UIDesignKit`）。
+- `Home.ets`：底部四 tab 总容器（无 params）。底部用原生 `Tabs` 悬浮玻璃底栏：`barOverlap(true)` + `barBackgroundBlurStyle(GlassTokens.BLUR_PANEL)` + `barMode(BarMode.Fixed)`，controller 复用 `HdsTabsController`（`@kit.UIDesignKit`）。⚠️ **勿改回 `HdsTabs` 组件**——本 SDK 工具链 ArkTS 编译器不认 HdsTabs 为 TabContent 容器（10905201），clean 构建实测仍报错，仅其 `HdsTabsController` 可复用。
 - **返回键策略**（全局约定）：`PDFConvertPage`、`BookkeepingConfirmPage` 顶部**无返回按钮**（仅居中标题，返回靠系统手势）；`PDFViewer` 顶部仅「编辑」按钮（`widthVp:64` 固定窄宽靠右）；`PDFEditPage` 顶部按钮 label **恒为「撤回」**（有操作撤回、无操作点击返回，不再显示"返回"字样）；`ProfilePrivacyPage` 保留「← 返回」。
 - `EditTab`：搜索 / 选择模式（RecentFilesPanel）、深浅模式。⚠️ 全部/星标切换必须用 `setFilter(mode)`（内部 `AppStorage.setOrCreate('fileFilterMode', mode)`），**勿直接赋值 `this.filterMode`**（@StorageProp 本地赋值不写回 AppStorage → 筛选不生效，曾因此 bug）。
 - `ConvertTab`：`@StorageProp('fileFilterMode')` 过滤聚合，全部/星标显式 `AppStorage.setOrCreate('fileFilterMode', ...)`，Dark。
@@ -144,3 +144,18 @@
 - 命中率 = `cache.read/(cache.read+input)`（input 为未命中新 token；cache.write 恒 0；双零行剔除；token 加权）。
 - 官方会话判定：session.model 的 JSON `providerID` == `deepseek`（Zen = `opencode`，不计，两者前缀不衔接）。
 - 完整口径/根因矩阵/成本对账：`docs/DEEPSEEK_CACHE_NOTES.md`。
+
+## 记账中心 + OCR 增强 + 本地模型总计划（2026-08 批准，见会话记忆）
+- **阶段 A（先交付，纯 ArkTS）**：OCR 互斥 + 图库选图记账 + 断点修复：
+  - 新增 `utils/OcrLock.ets`：模块级 `runOcrSession<T>(fn)`（Promise 链互斥）——根除 textRecognition 全局单例 double-init/release 崩溃（头号 bug）。
+  - 新增 `utils/BookOcr.ets`：`pickImagesToSandbox(ctx,max)`（PhotoViewPicker 多选 + uri 先拷沙盒）+ `ocrImagesToText(paths)`（pixelMap→recognize→release，均在 runOcrSession 内）。
+  - 三处 OCR 收敛进 runOcrSession：`ocr/CoreVisionOCR.ets`(:47,:73)、`utils/PDFOCRUtils.ets`(:49,:73)。
+  - 断点修复：`model/RecordModel.ets:9` RecordSource 加 `'img-ocr'`；`utils/AutoCategorizer.ets:29` 放宽；`utils/RecordDatabase.ets:306` cast 加 `'img-ocr'`；`pages/BookkeepingConfirmPage.ets:41` 删三元陷阱直传 RecordSource。
+  - 入口：`components/SmartReachBar.ets` 加第三球「图库」+ `pages/tabs/BookkeepingTab.ets` 接选图→OCR→push ConfirmPage(source:'img-ocr')。
+  - `AutoCategorizer` 抽 `RuleCategorizer`（调用点零改动）+ 预留 `enhance` 钩子（默认关）。
+  - 删除：`ConvertTab` 空按钮(:116-119)；`components/AutoRecordConfirm.ets`（零引用）。更正 lottie 口径（dependencies 均空、未声明）。
+- **阶段 A+（并入 A）**：OCR 图像预处理增强（纯本地无模型）：放大 2–3 倍 + 灰度/对比度 + 中值滤波/二值化/去倾斜 + 裁剪有效区 + 多 settings 重试取并集。
+- **阶段 B（之后）**：本地 OCR 大模型——PaddleOCR 中文(PP-OCR,Apache)→ONNX→MindSpore Lite 独立 converter_lite.exe 转 `.ms`（det+cls+rec，INT8 目标 ≤5–8MB）；不依赖 MindSpore Python（本机 Py3.14 不兼容）；RTX 5060 8GB/盘 167GB 够；风险=ONNX→.ms 算子支持与真机性能，接受「先切片不一定一次到位」；不走 HMS 云端 OCR。
+- **阶段 C（最后）**：记账 ML 分类双保险第 2 层——无现成账单分类模型，须自微调：albert-tiny-chinese(HF,~4M 参,Apache)→transformers→ONNX→converter_lite 转 .ms+INT8，产物 `model_int8.ms+vocab.txt+labels.json`；数据=存量记账+照片 OCR 文本，800–1500 条，工程内 `DatasetExportUtil`(recordDb→沙盒 JSON)+本机 `export_dataset.py`；接入 `utils/ml/BillClassifier.ets`(rawfile→filesDir+MindSporeLite CPU+手写 tokenizer) 注入 enhance，默认关、规则兜底，启用时同步改隐私/官申。
+- 交付顺序：A+A+ 一批编译真机验证 → B → C。
+- 本地环境事实：本机 Py3.14.5(`py -3`)、无 torch/mindspore/transformers、GPU RTX 5060 Laptop 8GB(驱动 610.62)、CPU Ryzen 9 8945HX、C 盘剩 167GB。MindSpore 不支持 Py3.14 → 微调用 PyTorch，转换用独立 converter_lite。

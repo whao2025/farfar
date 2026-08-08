@@ -26,6 +26,7 @@ interface PdfCoord {
 }
 
 const HIGHLIGHT_COLORS: number[] = [0xFFC300, 0xE0342C, 0x3B4C9B, 0x4E9E5F, 0xA79BC8, 0xCC5500];
+const HIGHLIGHT_WIDTHS: number[] = [100, 150, 200, 300, 400];
 
 @Entry
 @Component
@@ -43,6 +44,7 @@ struct PDFEditPage {
   @State activedTool: number = -1;
   @State canUndo: boolean = false;
   @State highlightColor: number = 0xFFC300;
+  @State highlightWidth: number = 200;
   @State overlayW: number = 0;
   @State overlayH: number = 0;
   @State pdfPageW: number = 595;
@@ -95,6 +97,10 @@ struct PDFEditPage {
     const params = this.getUIContext().getRouter().getParams() as EditPageParams;
     this.isNewDoc = params?.newDoc ?? false;
     this.filePath = params?.filePath ?? '';
+    const hostCtx = this.getUIContext().getHostContext();
+    if (hostCtx) {
+      this.ocrService.configure(hostCtx as common.Context);
+    }
     if (this.isNewDoc) {
       this.loadResult = pdfService.ParseResult.PARSE_SUCCESS;
       this.pageCount = 1;
@@ -381,38 +387,50 @@ struct PDFEditPage {
     }
     const s = this.scalePx();
     const hpt = this.pageHeightPt();
-    if (op.op === 'addText' || op.op === 'addImage' || op.op === 'addHighlight' || op.op === 'addTextAnnot') {
-      const w = op.op === 'addText' ? (op as EditTextOp).text.length * 8 : ((op.op === 'addHighlight' ? 200 : (op as EditImageOp).width));
-      const h = op.op === 'addText' ? 20 : (op.op === 'addHighlight' ? 30 : (op as EditImageOp).height);
-      return {
-        x: op.x * s,
-        y: (hpt - op.y) * s - h * s
-      };
+    const size = this.opPdfSize(index);
+    if (op.op === 'addText') {
+      return { x: op.x * s, y: (hpt - op.y) * s - size.y * s };
+    }
+    if (op.op === 'addImage') {
+      return { x: op.x * s, y: (hpt - op.y) * s - size.y * s };
+    }
+    if (op.op === 'addHighlight') {
+      return { x: op.x * s, y: (hpt - op.y) * s - size.y * s };
+    }
+    if (op.op === 'addTextAnnot') {
+      return { x: op.x * s, y: (hpt - op.y) * s - size.y * s };
     }
     return { x: 0, y: 0 };
   }
 
   private opSize(index: number): PdfCoord {
+    const s = this.scalePx();
+    const size = this.opPdfSize(index);
+    return { x: size.x * s, y: size.y * s };
+  }
+
+  private opPdfSize(index: number): PdfCoord {
     const op = this.ops[index];
     if (!op) {
       return { x: 0, y: 0 };
     }
-    const s = this.scalePx();
     if (op.op === 'addText') {
-      return { x: (op as EditTextOp).text.length * 8 * s, y: 20 * s };
+      const t = (op as EditTextOp).text;
+      const len = t.length > 0 ? t.length : 1;
+      return { x: len * 8, y: 20 };
     }
     if (op.op === 'addImage') {
-      return { x: (op as EditImageOp).width * s, y: (op as EditImageOp).height * s };
+      return { x: (op as EditImageOp).width, y: (op as EditImageOp).height };
     }
     if (op.op === 'addHighlight') {
-      return { x: 200 * s, y: 30 * s };
+      return { x: 200, y: 30 };
+    }
+    if (op.op === 'addTextAnnot') {
+      const c = (op as EditTextAnnotOp).content;
+      const len = c.length > 0 ? c.length : 1;
+      return { x: len * 10, y: 24 };
     }
     return { x: 0, y: 0 };
-  }
-
-  private isDraggableOp(index: number): boolean {
-    const op = this.ops[index];
-    return op !== undefined && (op.op === 'addText' || op.op === 'addImage');
   }
 
   private onObjDragStart(index: number, x: number, y: number): void {
@@ -426,7 +444,7 @@ struct PDFEditPage {
       return;
     }
     const op = this.ops[index];
-    if (!op || (op.op !== 'addText' && op.op !== 'addImage')) {
+    if (!op) {
       return;
     }
     const s = this.scalePx();
@@ -437,8 +455,21 @@ struct PDFEditPage {
     const dy = (y - this.dragStartY) / s;
     this.dragStartX = x;
     this.dragStartY = y;
-    op.x = op.x + dx;
-    op.y = op.y - dy;
+    if (op.op === 'addText') {
+      op.x = op.x + dx;
+      op.y = op.y - dy;
+    } else if (op.op === 'addImage') {
+      op.x = op.x + dx;
+      op.y = op.y - dy;
+    } else if (op.op === 'addHighlight') {
+      op.x = op.x + dx;
+      op.y = op.y - dy;
+    } else if (op.op === 'addTextAnnot') {
+      op.x = op.x + dx;
+      op.y = op.y - dy;
+    } else {
+      return;
+    }
     this.objTick = this.objTick + 1;
   }
 
@@ -471,6 +502,9 @@ struct PDFEditPage {
       return '';
     }
     const context = ctx as common.Context;
+    let src: image.ImageSource | null = null;
+    let pm: image.PixelMap | null = null;
+    let packer: image.ImagePacker | null = null;
     try {
       const photoPicker = new photoAccessHelper.PhotoViewPicker();
       const options = new photoAccessHelper.PhotoSelectOptions();
@@ -481,22 +515,21 @@ struct PDFEditPage {
         return '';
       }
       const uri = result.photoUris[0];
+      src = await image.createImageSource(uri);
+      pm = await src.createPixelMap();
+      packer = image.createImagePacker();
+      const packOptions: image.PackingOption = {
+        format: 'image/png',
+        quality: 90
+      };
+      const data = await packer.packToData(pm, packOptions);
       const sandboxPath = context.filesDir + '/edit_img_' + Date.now() + '.png';
-      let srcFd: number = 0;
       let dstFd: number = 0;
       try {
-        const stat = await fileIo.stat(uri);
-        const buf = new ArrayBuffer(stat.size);
-        const src = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY);
-        srcFd = src.fd;
-        await fileIo.read(srcFd, buf);
         const dst = await fileIo.open(sandboxPath, fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
         dstFd = dst.fd;
-        await fileIo.write(dstFd, buf);
+        await fileIo.write(dstFd, data);
       } finally {
-        if (srcFd !== 0) {
-          await fileIo.close(srcFd);
-        }
         if (dstFd !== 0) {
           await fileIo.close(dstFd);
         }
@@ -505,6 +538,25 @@ struct PDFEditPage {
     } catch (err) {
       console.error('pick image failed', JSON.stringify(err));
       return '';
+    } finally {
+      if (packer) {
+        try {
+          await packer.release();
+        } catch (err) {
+        }
+      }
+      if (pm) {
+        try {
+          await pm.release();
+        } catch (err) {
+        }
+      }
+      if (src) {
+        try {
+          await src.release();
+        } catch (err) {
+        }
+      }
     }
   }
 
@@ -517,7 +569,7 @@ struct PDFEditPage {
           .height('100%')
           .border({ width: 2, color: '#4C9AFF' })
       }
-      if (this.isDraggableOp(index) && this.selectedOpIndex === index) {
+      if (this.ops[index] !== undefined && (this.ops[index] as EditOp).op === 'addImage' && this.selectedOpIndex === index) {
         Stack()
           .width(20)
           .height(20)
@@ -564,7 +616,7 @@ struct PDFEditPage {
     const res: number[] = [];
     for (let i = 0; i < this.ops.length; i++) {
       const op = this.ops[i];
-      if (op.op === 'addText' || op.op === 'addImage') {
+      if (op.op === 'addText' || op.op === 'addImage' || op.op === 'addHighlight' || op.op === 'addTextAnnot') {
         res.push(i);
       }
     }
@@ -589,6 +641,15 @@ struct PDFEditPage {
             text: text
           };
           this.pushOp(op);
+          this.selectLastOp();
+          this.promptTextInput('修改字号（pt，默认16）', '16', (sizeValue: string) => {
+            const newSize = parseInt(sizeValue, 10);
+            if (isNaN(newSize) || newSize <= 0) {
+              return;
+            }
+            (op as EditTextOp).size = newSize;
+            this.objTick = this.objTick + 1;
+          });
           this.statusMsg = `已添加文本到第 ${page + 1} 页（保存后生效）`;
         });
         break;
@@ -596,6 +657,8 @@ struct PDFEditPage {
       case 1: {
         this.pickImage().then((path: string) => {
           if (!path) {
+            this.showToast('未选择图片');
+            this.activedTool = -1;
             return;
           }
           const op: EditImageOp = {
@@ -608,46 +671,55 @@ struct PDFEditPage {
             imagePath: path
           };
           this.pushOp(op);
+          this.selectLastOp();
           this.statusMsg = `已添加图片到第 ${page + 1} 页（保存后生效）`;
         });
         break;
       }
       case 2: {
-        const hpt = this.pageHeightPt();
-        const w = 200;
-        const h = 30;
-        const hlY = hpt - y - h;
-        const hlX = x - w / 2;
         const op: EditHighlightOp = {
           op: 'addHighlight',
           page: page,
-          x: hlX,
-          y: hlY,
-          width: w,
-          height: h,
+          x: x,
+          y: y,
+          width: this.highlightWidth,
+          height: 30,
           color: this.highlightColor
         };
         this.pushOp(op);
+        this.selectLastOp();
         break;
       }
       case 3: {
-        const op: EditTextAnnotOp = {
-          op: 'addTextAnnot',
-          page: page,
-          x: x,
-          y: y,
-          content: '',
-          color: 0x1A1A1F
-        };
-        this.pushOp(op);
+        this.promptTextInput('输入标注内容', '', (content: string) => {
+          if (!content.trim()) {
+            return;
+          }
+          const op: EditTextAnnotOp = {
+            op: 'addTextAnnot',
+            page: page,
+            x: x,
+            y: y,
+            content: content,
+            color: 0x1A1A1F
+          };
+          this.pushOp(op);
+          this.selectLastOp();
+          this.statusMsg = `已添加标注到第 ${page + 1} 页（保存后生效）`;
+        });
         break;
       }
       default:
         return;
     }
-    if (this.activedTool !== 0 && this.activedTool !== 1) {
+    if (this.activedTool === 2) {
       this.statusMsg = `已添加，保存后生效（第 ${page + 1} 页）`;
     }
+  }
+
+  private selectLastOp(): void {
+    this.activedTool = -1;
+    this.selectedOpIndex = this.ops.length - 1;
   }
 
   private onOcrMode(): void {
@@ -1058,17 +1130,45 @@ struct PDFEditPage {
               }, (block: TextBlock, idx: number) => block.id + '_' + idx.toString())
             }
           } else if (this.activedTool >= 0 && this.activedTool <= 3) {
-            Column()
-              .width('100%')
-              .height('100%')
-              .backgroundColor(Color.Transparent)
-              .onAreaChange((oldArea: Area, newArea: Area) => {
-                this.overlayW = Number(newArea.width);
-                this.overlayH = Number(newArea.height);
-              })
-              .onTouch((event: TouchEvent) => {
-                this.onOverlayTouch(event);
-              })
+            Column() {
+              if (this.activedTool === 2) {
+                Column({ space: 8 }) {
+                  this.pickColorRow()
+                  Row({ space: 8 }) {
+                    ForEach(HIGHLIGHT_WIDTHS, (w: number) => {
+                      Text(`${w}`)
+                        .fontSize(12)
+                        .fontColor(this.highlightWidth === w
+                          ? (this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
+                          : '#8A8A96')
+                        .fontWeight(this.highlightWidth === w ? FontWeight.Bold : FontWeight.Normal)
+                        .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+                        .borderRadius(12)
+                        .backgroundColor(this.highlightWidth === w
+                          ? (this.dark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.08)')
+                          : Color.Transparent)
+                        .onClick(() => {
+                          this.highlightWidth = w;
+                        })
+                    }, (w: number) => `${w}`)
+                  }
+                  .width('100%')
+                  .justifyContent(FlexAlign.Center)
+                }
+                .width('100%')
+                .padding({ top: 12, bottom: 8 })
+              }
+            }
+            .width('100%')
+            .height('100%')
+            .backgroundColor(Color.Transparent)
+            .onAreaChange((oldArea: Area, newArea: Area) => {
+              this.overlayW = Number(newArea.width);
+              this.overlayH = Number(newArea.height);
+            })
+            .onTouch((event: TouchEvent) => {
+              this.onOverlayTouch(event);
+            })
           } else {
             ForEach(this.sessionOpIndexes(), (index: number) => {
               this.sessionObjectBox(index)

@@ -1,5 +1,7 @@
 import { GlassTokens } from '../../theme/GlassTokens';
 import { common } from '@kit.AbilityKit';
+import { window } from '@kit.ArkUI';
+import { promptAction } from '@kit.ArkUI';
 import curves from '@ohos.curves';
 import { motion } from '@kit.MultimodalAwarenessKit';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -10,6 +12,7 @@ import { recordDb } from '../../utils/RecordDatabase';
 import { budgetPrefs } from '../../utils/BudgetPreferences';
 import { BookkeepingRecord, WeekDaySpending, CategoryStat } from '../../model/RecordModel';
 import { SmartReachBar } from '../../components/SmartReachBar';
+import { pickImagesToSandbox, ocrImagesToText } from '../../utils/BookOcr';
 
 @Component
 export struct BookkeepingTab {
@@ -27,13 +30,27 @@ export struct BookkeepingTab {
   @State categoryStats: CategoryStat[] = [];
   @State barX: number = 0;
   @State barY: number = 0;
+  @State hidden: boolean = true;
 
   private lastSide: string = 'right';
   private currentSide: string = 'right';
   private subscribed: boolean = false;
-  private readonly BAR_W: number = 68 * 0.75 + 8 * 0.75 * 2;  // 约 63vp
-  private readonly BAR_H: number = (68 * 0.75) * 2 + 16 * 0.75 + 8 * 0.75 * 2;  // 约 126vp
+  private motionSubscribed: string = '';
+  private motionOperatingCb: (s: motion.OperatingHandStatus) => void = () => {};
+  private motionHoldingCb: (s: motion.HoldingHandStatus) => void = () => {};
+  private dragging: boolean = false;
+  private dragStartX: number = 0;
+  private dragCooldown: boolean = false;
+  private hideTimer: number = -1;
+  private hideToken: number = 0;
+  private avoidLeft: number = 0;
+  private avoidRight: number = 0;
+  private readonly BAR_W: number = 68 * 0.6 + 8 * 0.6 * 2;  // 约 50.4vp
+  private readonly BAR_H: number = (68 * 0.6) * 3 + 16 * 0.6 * 2 + 8 * 0.6 * 2;  // 三球约 151.2vp
   private readonly EDGE: number = 16;
+  private readonly EXPOSE: number = (68 * 0.6 + 8 * 0.6 * 2) * 0.5;  // 收起露一半（≈25.2vp）
+  private readonly SAFE_MARGIN: number = 6;
+  private readonly HIDE_TIMEOUT: number = 10000;
 
   aboutToAppear() {
     const ctx = this.getUIContext().getHostContext();
@@ -46,74 +63,300 @@ export struct BookkeepingTab {
       }).catch((err: Error) => console.error('db init failed:', err));
     }
     if (!this.subscribed) {
-      this.subscribed = true;
       this.subscribeMotion();
     }
-    this.barX = this.rightX();
+    this.hidden = true;
+    this.barX = this.calcHiddenX(this.currentSide);
     this.barY = this.centerY();
+    this.loadAvoidArea();
   }
 
   aboutToDisappear(): void {
     if (this.subscribed) {
       this.subscribed = false;
-      try {
-        motion.off('holdingHandChanged');
-      } catch (e) {
-        // 忽略
+      if (this.motionSubscribed === 'operating') {
+        try {
+          motion.off('operatingHandChanged', this.motionOperatingCb);
+        } catch (e) {
+          // 忽略
+        }
+      } else if (this.motionSubscribed === 'holding') {
+        try {
+          motion.off('holdingHandChanged', this.motionHoldingCb);
+        } catch (e) {
+          // 忽略
+        }
       }
+      this.motionSubscribed = '';
     }
+    this.clearHideTimer();
+    this.dragging = false;
+    this.dragCooldown = false;
   }
 
   private rightX(): number {
     return Math.max(this.EDGE, (this.winW / Math.max(this.density, 1)) - this.BAR_W - this.EDGE);
   }
 
+  private widthVp(): number {
+    return this.winW / Math.max(this.density, 1);
+  }
+
+  private leftHiddenX(): number {
+    const edge = Math.max(this.EDGE, this.avoidLeft + this.SAFE_MARGIN);
+    return edge - this.BAR_W + this.EXPOSE;
+  }
+
+  private rightHiddenX(): number {
+    return this.widthVp() - this.avoidRight - this.SAFE_MARGIN - this.EXPOSE;
+  }
+
+  private calcHiddenX(side: string): number {
+    return side === 'left' ? this.leftHiddenX() : this.rightHiddenX();
+  }
+
   private centerY(): number {
     const H = this.winH / Math.max(this.density, 1);
-    // 底部导航浮动胶囊约占屏高 140vp，胶囊高 ~126vp
-    // 中心位置 = H - 140 - 63 - EDGE = H - 211 - EDGE
+    // 底部导航浮动胶囊约占屏高 140vp，胶囊高 ~151vp
+    // 中心位置 = H - 140 - 50 - EDGE
     const aboveNav = H - 150 - this.BAR_H / 2 - this.EDGE;
     const contentBottom = H * 0.68 - this.BAR_H / 2;  // 内容区约 68% 处
     return Math.max(this.EDGE, Math.min(contentBottom, aboveNav));
   }
 
-  private onWinResize(): void {
-    this.barX = this.lastSide === 'left' ? this.EDGE : this.rightX();
-    this.barY = this.centerY();
-  }
-
-  private moveToSide(side: string): void {
-    if (this.winW <= 0 || side === this.currentSide) {
+  private loadAvoidArea(): void {
+    const ctx = this.getUIContext().getHostContext();
+    if (!ctx) {
       return;
     }
-    this.currentSide = side;
-    const tx = side === 'left' ? this.EDGE : this.rightX();
+    try {
+      window.getLastWindow(ctx as common.Context).then((win: window.Window) => {
+        const avoid = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM_GESTURE);
+        const d = Math.max(this.density, 1);
+        this.avoidLeft = (avoid.leftRect ? avoid.leftRect.width : 0) / d;
+        this.avoidRight = (avoid.rightRect ? avoid.rightRect.width : 0) / d;
+      }).catch(() => {
+        this.avoidLeft = 0;
+        this.avoidRight = 0;
+      });
+    } catch (e) {
+      this.avoidLeft = 0;
+      this.avoidRight = 0;
+    }
+  }
+
+  private onWinResize(): void {
+    this.loadAvoidArea();
+    if (this.hidden) {
+      const tx = this.calcHiddenX(this.currentSide);
+      const ty = this.centerY();
+      this.getUIContext().animateTo({ curve: curves.springMotion(0.6, 0.9, 0) }, () => {
+        this.barX = tx;
+        this.barY = ty;
+      });
+      return;
+    }
+    const tx = this.lastSide === 'left' ? this.EDGE : this.rightX();
     const ty = this.centerY();
-    this.getUIContext().animateTo({ curve: curves.interpolatingSpring(0, 1, 288, 30) }, () => {
+    this.getUIContext().animateTo({ curve: curves.springMotion(0.6, 0.9, 0) }, () => {
       this.barX = tx;
       this.barY = ty;
     });
   }
 
+  private moveToSide(side: string): void {
+    if (this.winW <= 0 || this.dragging || this.dragCooldown || side === this.currentSide) {
+      return;
+    }
+    this.currentSide = side;
+    if (this.hidden) {
+      // 半隐藏态换手：实际挪到新侧隐藏位（半露），否则用户无视觉反馈
+      this.lastSide = side;
+      const tx = this.calcHiddenX(side);
+      const ty = this.centerY();
+      this.getUIContext().animateTo({ curve: curves.springMotion(0.6, 0.9, 0) }, () => {
+        this.barX = tx;
+        this.barY = ty;
+      });
+      return;
+    }
+    const tx = side === 'left' ? this.EDGE : this.rightX();
+    const ty = this.centerY();
+    this.getUIContext().animateTo({ curve: curves.springMotion(0.6, 0.9, 0) }, () => {
+      this.barX = tx;
+      this.barY = ty;
+    });
+  }
+
+  private clearHideTimer(): void {
+    this.hideToken++;
+    if (this.hideTimer >= 0) {
+      clearTimeout(this.hideTimer);
+      this.hideTimer = -1;
+    }
+  }
+
+  private resetHideTimer(): void {
+    if (this.hidden) {
+      return;
+    }
+    this.clearHideTimer();
+    const t: number = this.hideToken;
+    const token: number = t;
+    this.hideTimer = setTimeout(() => {
+      if (this.hideToken !== token) {
+        return;
+      }
+      this.hideToCurrentSide();
+    }, this.HIDE_TIMEOUT);
+  }
+
+  private hideToCurrentSide(): void {
+    this.clearHideTimer();
+    const tx = this.calcHiddenX(this.currentSide);
+    const ty = this.centerY();
+    this.getUIContext().animateTo({ curve: curves.springMotion(0.6, 0.9, 0) }, () => {
+      this.barX = tx;
+      this.barY = ty;
+    });
+    this.hidden = true;
+  }
+
+  private onDragStartCb(): void {
+    this.hidden = false;
+    this.dragging = true;
+    this.dragStartX = this.barX;
+  }
+
+  private onDragMoveCb(dx: number): void {
+    const minX = this.calcHiddenX('left');
+    const maxX = this.rightHiddenX();
+    if (maxX > minX) {
+      this.barX = Math.min(maxX, Math.max(minX, this.dragStartX + dx));
+    } else {
+      this.barX = this.draggingFlagGuard(this.dragStartX + dx);
+    }
+  }
+
+  private draggingFlagGuard(x: number): number {
+    const minX = this.EDGE;
+    const maxX = this.rightX();
+    return Math.min(maxX, Math.max(minX, x));
+  }
+
+  private onDragEndCb(): void {
+    this.dragging = false;
+    const minX = this.calcHiddenX('left');
+    const maxX = this.rightHiddenX();
+    if (maxX > minX && (this.barX <= minX + this.BAR_W * 0.5 || this.barX >= maxX - this.BAR_W * 0.5)) {
+      const side = this.barX <= minX + this.BAR_W * 0.5 ? 'left' : 'right';
+      this.currentSide = side;
+      this.lastSide = side;
+      this.hideToCurrentSide();
+      this.armCooldown();
+      return;
+    }
+    const mid = (this.EDGE + this.rightX()) / 2;
+    const side = this.barX < mid ? 'left' : 'right';
+    const tx = side === 'left' ? this.EDGE : this.rightX();
+    this.currentSide = side;
+    this.lastSide = side;
+    this.hidden = false;
+    this.getUIContext().animateTo({ curve: curves.springMotion(0.6, 0.9, 0) }, () => {
+      this.barX = tx;
+      this.barY = this.centerY();
+    });
+    this.armCooldown();
+    this.resetHideTimer();
+  }
+
+  private armCooldown(): void {
+    this.dragCooldown = true;
+    const t = this.hideToken;
+    setTimeout(() => {
+      if (this.hideToken === t) {
+        this.dragCooldown = false;
+      }
+    }, 300);
+  }
+
   private subscribeMotion(): void {
+    if (!this.canUseMotion()) {
+      console.warn('motion syscap unsupported, keep right side');
+      return;
+    }
+    let anySuccess: boolean = false;
+    // ① 一次性查询：独立 try/catch，失败不牵连订阅；LEFT 时同步校正初始侧
     try {
       const st = motion.getRecentOperatingHandStatus();
       if (st === motion.OperatingHandStatus.LEFT_HAND_OPERATED) {
+        this.currentSide = 'left';
         this.lastSide = 'left';
       }
-      motion.on('holdingHandChanged', (s: motion.HoldingHandStatus) => {
-        if (s === motion.HoldingHandStatus.LEFT_HAND_HELD) {
-          this.moveToSide('left');
-        } else if (s === motion.HoldingHandStatus.RIGHT_HAND_HELD) {
-          this.moveToSide('right');
-        }
-      });
     } catch (err) {
       const e = err as BusinessError;
-      if (e.code === 801 || e.code === 201) {
-        console.error('motion unavailable, keep right side:', e.code, e.message);
+      console.error('motion getRecent failed:', e.code, e.message);
+    }
+    // ② 主订阅 holdingHandChanged（@since20，握持手语义，设备实测可用）
+    try {
+      this.motionHoldingCb = (s: motion.HoldingHandStatus): void => {
+        if (s === motion.HoldingHandStatus.LEFT_HAND_HELD) {
+          console.info('motion event -> LEFT_HAND_HELD');
+          this.moveToSide('left');
+          this.resetHideTimer();
+        } else if (s === motion.HoldingHandStatus.RIGHT_HAND_HELD) {
+          console.info('motion event -> RIGHT_HAND_HELD');
+          this.moveToSide('right');
+          this.resetHideTimer();
+        } else {
+          console.info('motion event ->', s);
+        }
+      };
+      motion.on('holdingHandChanged', this.motionHoldingCb);
+      this.motionSubscribed = 'holding';
+      anySuccess = true;
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error('motion on holdingHandChanged failed:', e.code, e.message);
+    }
+    // ③ 备订阅 operatingHandChanged（@since15，ACTIVITY_MOTION 或 DETECT_GESTURE）：主订阅失败才尝试
+    if (!anySuccess) {
+      try {
+        this.motionOperatingCb = (s: motion.OperatingHandStatus): void => {
+          if (s === motion.OperatingHandStatus.LEFT_HAND_OPERATED) {
+            console.info('motion event -> LEFT_HAND_OPERATED');
+            this.moveToSide('left');
+            this.resetHideTimer();
+          } else if (s === motion.OperatingHandStatus.RIGHT_HAND_OPERATED) {
+            console.info('motion event -> RIGHT_HAND_OPERATED');
+            this.moveToSide('right');
+            this.resetHideTimer();
+          } else {
+            console.info('motion event ->', s);
+          }
+        };
+        motion.on('operatingHandChanged', this.motionOperatingCb);
+        this.motionSubscribed = 'operating';
+        anySuccess = true;
+      } catch (err) {
+        const e = err as BusinessError;
+        console.error('motion on operatingHandChanged failed:', e.code, e.message);
       }
-      this.lastSide = 'right';
+    }
+    if (anySuccess) {
+      this.subscribed = true;
+      console.info(`motion subscribed ok, type=${this.motionSubscribed}`);
+    } else {
+      console.error('motion both subscriptions failed, keep right side');
+    }
+  }
+
+  private canUseMotion(): boolean {
+    try {
+      return canIUse('SystemCapability.MultimodalAwareness.Motion');
+    } catch (err) {
+      // 无法判断时放行，交给订阅 catch 兜底
+      return true;
     }
   }
 
@@ -268,18 +511,56 @@ export struct BookkeepingTab {
   }
 
   private onAddRecord(): void {
+    if (this.hidden) {
+      return;
+    }
     this.getUIContext().getRouter().pushUrl({
       url: 'pages/ManualEntryPage'
     });
   }
 
   private onImportPdf(): void {
+    if (this.hidden) {
+      return;
+    }
     this.getUIContext().getRouter().pushUrl({
       url: 'pages/PDFConvertPage',
       params: {
         mode: 'pdfToCredit'
       }
     });
+  }
+
+  private async onImportImage(): Promise<void> {
+    if (this.hidden) {
+      return;
+    }
+    const ctx = this.getUIContext().getHostContext();
+    if (!ctx) {
+      return;
+    }
+    try {
+      const paths = await pickImagesToSandbox(ctx as common.Context);
+      if (paths.length === 0) {
+        return;
+      }
+      const text = await ocrImagesToText(paths);
+      if (text.trim().length === 0) {
+        promptAction.showToast({ message: '未识别到文字' });
+        return;
+      }
+      this.getUIContext().getRouter().pushUrl({
+        url: 'pages/BookkeepingConfirmPage',
+        params: {
+          source: 'img-ocr',
+          text: text,
+          mode: 'full'
+        }
+      });
+    } catch (err) {
+      console.error('onImportImage failed', JSON.stringify(err));
+      promptAction.showToast({ message: '图片识别失败' });
+    }
   }
 
   build() {
@@ -326,7 +607,11 @@ export struct BookkeepingTab {
       SmartReachBar({
         dark: this.dark,
         onManual: () => this.onAddRecord(),
-        onPdfAuto: () => this.onImportPdf()
+        onPdfAuto: () => this.onImportPdf(),
+        onImageImport: () => this.onImportImage(),
+        onReachDragStart: () => this.onDragStartCb(),
+        onReachDragMove: (dx: number) => this.onDragMoveCb(dx),
+        onReachDragEnd: () => this.onDragEndCb()
       })
       .position({ x: this.barX, y: this.barY })
     }

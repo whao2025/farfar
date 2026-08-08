@@ -35,6 +35,7 @@ export class BudgetPreferences {
   async setMonthlyBudget(budget: number): Promise<void> {
     if (!this.prefs) throw new Error('Preferences not initialized');
     await this.prefs.put('monthly_budget', budget);
+    await this.prefs.flush();
   }
 
   async getBudgetConfig(): Promise<BudgetConfig> {
@@ -69,12 +70,7 @@ export class BudgetPreferences {
   async setLaunched(): Promise<void> {
     if (!this.prefs) return;
     await this.prefs.put('launched_before', true);
-  }
-
-  async close(): Promise<void> {
-    if (this.prefs) {
-      this.prefs = null;
-    }
+    await this.prefs.flush();
   }
 }
 

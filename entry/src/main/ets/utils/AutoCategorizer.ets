@@ -1,124 +1,38 @@
-import { AmountParser } from './AmountParser';
-import { budgetPrefs } from './BudgetPreferences';
-import {
-  BookkeepingRecord,
-  Suggestion,
-  CategoryInfo,
-  EXPENSE_CATEGORIES,
-  INCOME_CATEGORIES
-} from '../model/RecordModel';
+import { Suggestion, CategoryInfo, RecordSource } from '../model/RecordModel';
+import { CategorizationResult } from './AutoCategorizerTypes';
+import { RuleCategorizer, EnhanceFn } from './RuleCategorizer';
 
-export interface CategorySummary {
-  total: number;
-  byCategory: Record<string, number>;
-  totalAmount: number;
-}
-
-export interface CategorizationResult {
-  suggestions: Suggestion[];
-  summary: CategorySummary;
-}
-
+/**
+ * 记账分类门面——内部委托 RuleCategorizer（规则引擎）。
+ * 调用点零改动（保持旧静态签名）；为阶段 C 预留 setEnhance 钩子（默认关闭）。
+ */
 export class AutoCategorizer {
+  static setEnhance(fn: EnhanceFn | null): void {
+    RuleCategorizer.enhance = fn;
+  }
+
   static getCategories(): CategoryInfo[] {
-    return EXPENSE_CATEGORIES.concat(INCOME_CATEGORIES);
+    return RuleCategorizer.getCategories();
   }
 
   static async categorizeBatch(
     text: string,
-    source: 'pdf-text' | 'pdf-ocr' = 'pdf-text'
+    source: RecordSource = 'pdf-text'
   ): Promise<CategorizationResult> {
-    const suggestions = AmountParser.parse(text, source);
-    const summary = AutoCategorizer.buildSummary(suggestions);
-    const merchantMap = await AutoCategorizer.loadMerchantMap();
-
-    const enhanced: Suggestion[] = [];
-    for (const s of suggestions) {
-      if (s.merchant && merchantMap.has(s.merchant)) {
-        const mappedCategory: string = merchantMap.get(s.merchant) as string;
-        enhanced.push({
-          amount: s.amount,
-          type: s.type,
-          category: mappedCategory,
-          confidence: Math.max(s.confidence, 0.8),
-          note: s.note,
-          merchant: s.merchant,
-          timestamp: s.timestamp,
-          source: s.source
-        });
-      } else {
-        enhanced.push(s);
-      }
-    }
-
-    return {
-      suggestions: enhanced,
-      summary
-    };
-  }
-
-  private static buildSummary(suggestions: Suggestion[]): CategorySummary {
-    const byCategory: Record<string, number> = {};
-    let totalAmount = 0;
-
-    for (const s of suggestions) {
-      byCategory[s.category] = (byCategory[s.category] || 0) + s.amount;
-      totalAmount += s.amount;
-    }
-
-    return {
-      total: suggestions.length,
-      byCategory,
-      totalAmount
-    };
-  }
-
-  private static async loadMerchantMap(): Promise<Map<string, string>> {
-    const map = new Map<string, string>();
-    map.set('沃尔玛', '购物');
-    map.set('山姆', '购物');
-    map.set('永辉', '购物');
-    map.set('华联', '购物');
-    map.set('肯德基', '餐饮');
-    map.set('麦当劳', '餐饮');
-    map.set('星巴克', '餐饮');
-    map.set('瑞幸', '餐饮');
-    map.set('汉堡王', '餐饮');
-    map.set('美团', '购物');
-    map.set('饿了么', '餐饮');
-    map.set('淘宝', '购物');
-    map.set('京东', '购物');
-    map.set('天猫', '购物');
-    map.set('拼多多', '购物');
-    map.set('滴滴', '交通');
-    map.set('中石油', '交通');
-    map.set('中石化', '交通');
-    return map;
+    return RuleCategorizer.categorizeBatch(text, source);
   }
 
   static validateSuggestion(s: Suggestion): boolean {
-    return (
-      typeof s.amount === 'number' &&
-      !isNaN(s.amount) &&
-      Math.abs(s.amount) > 0 &&
-      Math.abs(s.amount) < 100000 &&
-      typeof s.category === 'string' &&
-      s.category.length > 0 &&
-      typeof s.note === 'string' &&
-      ['expense', 'income'].includes(s.type) &&
-      typeof s.confidence === 'number' &&
-      s.confidence >= 0 &&
-      s.confidence <= 1.0
-    );
+    return RuleCategorizer.validateSuggestion(s);
   }
 
   static filterValid(suggestions: Suggestion[]): Suggestion[] {
-    return suggestions.filter(AutoCategorizer.validateSuggestion);
+    return RuleCategorizer.filterValid(suggestions);
   }
 
   static async getSuggestionsForEdit(text: string): Promise<Suggestion[]> {
-    const result = await AutoCategorizer.categorizeBatch(text);
-    return AutoCategorizer.filterValid(result.suggestions);
+    const result = await RuleCategorizer.categorizeBatch(text);
+    return RuleCategorizer.filterValid(result.suggestions);
   }
 }
 

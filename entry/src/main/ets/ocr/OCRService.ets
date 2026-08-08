@@ -1,8 +1,10 @@
+import { common } from '@kit.AbilityKit';
 import { OCRResult, OCROptions, OCRProgress } from './OCRTypes';
 import { CoreVisionOCR } from './CoreVisionOCR';
 
 export interface OCRService {
   recognize(pdfPath: string, options?: OCROptions, onProgress?: (p: OCRProgress) => void): Promise<OCRResult>;
+  configure(context?: common.Context): void;
 }
 
 export function createOCRService(): OCRService {

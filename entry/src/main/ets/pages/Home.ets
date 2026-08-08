@@ -1,4 +1,4 @@
-import { HdsTabs, HdsTabsController, hdsMaterial } from '@kit.UIDesignKit';
+import { HdsTabsController } from '@kit.UIDesignKit';
 import { GlassTokens } from '../theme/GlassTokens';
 import { GlassToolbar } from '../components/GlassToolbar';
 import { EditTab } from './tabs/EditTab';
@@ -57,7 +57,7 @@ struct Home {
           .width('100%')
         }
 
-        HdsTabs({ controller: this.tabsController, index: this.currentIndex }) {
+        Tabs({ index: this.currentIndex, controller: this.tabsController }) {
           TabContent() {
             EditTab()
           }
@@ -82,21 +82,10 @@ struct Home {
         .vertical(false)
         .scrollable(false)
         .barOverlap(true)
-        .barHeight(62)
-        .barFloatingStyle({
-          barWidth: { smallWidth: 300, mediumWidth: 360, largeWidth: 440 },
-          barSideMargin: 16,
-          barBottomMargin: 56,
-          gradientMask: {
-            maskColor: this.dark ? 'rgba(42,36,64,0.40)' : 'rgba(246,233,255,0.40)',
-            maskHeight: 92
-          },
-          systemMaterialEffect: {
-            materialType: hdsMaterial.MaterialType.IMMERSIVE,
-            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-          }
-        })
-        .cachedMaxCount(2, TabsCacheMode.CACHE_BOTH_SIDE)
+        .barBackgroundBlurStyle(GlassTokens.BLUR_PANEL)
+        .barMode(BarMode.Fixed)
+        .width('100%')
+        .layoutWeight(1)
         .onChange((index: number) => {
           this.currentIndex = index;
         })

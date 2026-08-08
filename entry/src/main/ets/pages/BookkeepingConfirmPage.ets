@@ -2,9 +2,11 @@ import { common } from '@kit.AbilityKit';
 import { GlassTokens } from '../theme/GlassTokens';
 import { GlassToolbar } from '../components/GlassToolbar';
 import { GlassButton } from '../components/GlassButton';
-import { Suggestion, BookkeepingRecord, RecordStatus } from '../model/RecordModel';
+import { Suggestion, BookkeepingRecord, RecordStatus, RecordSource } from '../model/RecordModel';
 import { AutoCategorizer } from '../utils/AutoCategorizer';
 import { recordDb } from '../utils/RecordDatabase';
+
+const MIN_AUTO_CONFIDENCE = 0.4;
 
 interface ConfirmPageParams {
   source?: string;
@@ -22,6 +24,7 @@ struct BookkeepingConfirmPage {
   @State statusMsg: string = '';
   @State pdfText: string = '';
   @State suggestions: Suggestion[] = [];
+  @State selected: boolean[] = [];
   @State savedCount: number = 0;
 
   aboutToAppear(): void {
@@ -38,8 +41,9 @@ struct BookkeepingConfirmPage {
     this.busy = true;
     this.statusMsg = '分析中…';
     try {
-      const result = await AutoCategorizer.categorizeBatch(this.pdfText, this.source === 'pdf-ocr' ? 'pdf-ocr' : 'pdf-text');
+      const result = await AutoCategorizer.categorizeBatch(this.pdfText, this.source as RecordSource);
       this.suggestions = result.suggestions;
+      this.selected = this.suggestions.map((s: Suggestion): boolean => s.confidence >= MIN_AUTO_CONFIDENCE);
       this.statusMsg = `识别到 ${result.summary.total} 条记录`;
     } catch (err) {
       console.error('parse failed', JSON.stringify(err));
@@ -49,8 +53,35 @@ struct BookkeepingConfirmPage {
     }
   }
 
-  private async onSaveAll(): Promise<void> {
-    if (this.suggestions.length === 0) {
+  private toggleIndex(idx: number): void {
+    this.selected = this.selected.map((v: boolean, i: number): boolean => i === idx ? !v : v);
+  }
+
+  private setFromCheckbox(idx: number, val: boolean): void {
+    this.selected = this.selected.map((v: boolean, i: number): boolean => i === idx ? val : v);
+  }
+
+  private getSelectedCount(): number {
+    return this.suggestions.filter((s: Suggestion, i: number): boolean => this.selected[i]).length;
+  }
+
+  private isAllSelected(): boolean {
+    return this.suggestions.length > 0 && this.getSelectedCount() === this.suggestions.length;
+  }
+
+  private toggleSelectAll(): void {
+    const target = this.isAllSelected() ? false : true;
+    this.selected = this.suggestions.map((s: Suggestion): boolean => target);
+  }
+
+  private getSelectedTotalAmount(): number {
+    return this.suggestions.reduce((sum: number, s: Suggestion, i: number): number => this.selected[i] ? sum + s.amount : sum, 0);
+  }
+
+  private async onSaveSelected(): Promise<void> {
+    const chosen = this.suggestions.filter((s: Suggestion, i: number): boolean => this.selected[i]);
+    if (chosen.length === 0) {
+      this.statusMsg = '请至少勾选一条记录';
       return;
     }
     this.busy = true;
@@ -63,7 +94,7 @@ struct BookkeepingConfirmPage {
         await prefs.budgetPrefs.init(ctx as common.Context);
       }
       const now = Date.now();
-      const records: BookkeepingRecord[] = this.suggestions.map((s: Suggestion): BookkeepingRecord => ({
+      const records: BookkeepingRecord[] = chosen.map((s: Suggestion): BookkeepingRecord => ({
         id: null,
         amount: s.type === 'income' ? Math.abs(s.amount) : -Math.abs(s.amount),
         type: s.type === 'income' ? 'income' : 'expense',
@@ -102,10 +133,6 @@ struct BookkeepingConfirmPage {
     return `${y}-${m}-${day}`;
   }
 
-  private getTotalAmount(): number {
-    return this.suggestions.reduce((sum, s) => sum + s.amount, 0);
-  }
-
   build() {
     Stack() {
       Column() {
@@ -120,7 +147,7 @@ struct BookkeepingConfirmPage {
           .width('100%')
         }
 
-        Column({ space: 20 }) {
+        Column({ space: 12 }) {
           if (this.busy || this.statusMsg) {
             Text(this.statusMsg)
               .fontSize(14)
@@ -130,53 +157,76 @@ struct BookkeepingConfirmPage {
           }
 
           if (this.suggestions.length > 0 && !this.busy) {
-            Text(`识别到 ${this.suggestions.length} 条记录 | 合计: ¥${Math.abs(this.getTotalAmount()).toFixed(2)}`)
+            Text(`识别到 ${this.suggestions.length} 条记录 | 已选 ${this.getSelectedCount()} | 合计: ¥${Math.abs(this.getSelectedTotalAmount()).toFixed(2)}`)
               .fontSize(13)
               .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
               .textAlign(TextAlign.Center)
 
-            // 显示前 3 条建议预览
-            Column({ space: 10 }) {
-              ForEach(this.suggestions.slice(0, Math.min(3, this.suggestions.length)),
-                (item: Suggestion, idx: number) => {
-                  Column() {
-                    Row() {
-                      Text(item.type === 'income' ? '+¥' : '-¥')
-                        .fontSize(16)
-                        .fontColor(item.type === 'income' ? '#10B981' : '#EF4444')
-                        .fontWeight(FontWeight.Bold)
-                      Text(Math.abs(item.amount).toFixed(2))
-                        .fontSize(16)
-                        .fontColor(this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
-                        .fontWeight(FontWeight.Bold)
-                      Blank()
-                      Text(`[${item.category}]`)
-                        .fontSize(12)
-                        .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
+            GlassButton({
+              label: this.isAllSelected() ? '取消全选' : '全选',
+              dark: this.dark,
+              heightVp: 36,
+              fontSize: 14,
+              onClickHandler: () => this.toggleSelectAll()
+            })
+              .width(120)
+
+            // 全量可滚动勾选列表
+            Scroll() {
+              Column({ space: 10 }) {
+                ForEach(this.suggestions,
+                  (item: Suggestion, idx: number) => {
+                    Row({ space: 8 }) {
+                      Checkbox()
+                        .select(this.selected[idx])
+                        .onChange((v: boolean) => this.setFromCheckbox(idx, v))
+                        .hitTestBehavior(HitTestMode.Block)
+                      Column() {
+                        Row() {
+                          Text(item.type === 'income' ? '+¥' : '-¥')
+                            .fontSize(16)
+                            .fontColor(item.type === 'income' ? '#10B981' : '#EF4444')
+                            .fontWeight(FontWeight.Bold)
+                          Text(Math.abs(item.amount).toFixed(2))
+                            .fontSize(16)
+                            .fontColor(this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
+                            .fontWeight(FontWeight.Bold)
+                          Blank()
+                          Text(`[${item.category}]`)
+                            .fontSize(12)
+                            .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
+                        }
+                        .width('100%')
+                        .alignItems(VerticalAlign.Center)
+
+                        Text(item.note)
+                          .fontSize(11)
+                          .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
+                          .textAlign(TextAlign.Start)
+                          .maxLines(2)
+
+                        Text(`置信度 ${(item.confidence * 100).toFixed(0)}%`)
+                          .fontSize(10)
+                          .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
+                      }
+                      .layoutWeight(1)
+                      .alignItems(HorizontalAlign.Start)
                     }
                     .width('100%')
-                    .alignItems(VerticalAlign.Center)
-
-                    Text(item.note)
-                      .fontSize(11)
-                      .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
-                      .textAlign(TextAlign.Start)
-                      .maxLines(2)
-
-                    Text(`置信度 ${(item.confidence * 100).toFixed(0)}%`)
-                      .fontSize(10)
-                      .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
-                  }
-                  .width('100%')
-                  .padding({ top: 8, bottom: 8 })
-                  .borderColor(this.dark ? GlassTokens.BORDER_DARK : GlassTokens.BORDER_LIGHT)
-                  .borderWidth(0)
-                  .borderRadius(8)
-                },
-                (item: Suggestion, idx: number) => idx.toString()
-              )
+                    .padding({ top: 8, bottom: 8 })
+                    .borderColor(this.dark ? GlassTokens.BORDER_DARK : GlassTokens.BORDER_LIGHT)
+                    .borderWidth(0)
+                    .borderRadius(8)
+                    .onClick(() => this.toggleIndex(idx))
+                  },
+                  (item: Suggestion, idx: number) => idx.toString() + '_' + (this.selected[idx] ? 1 : 0)
+                )
+              }
+              .width('100%')
+              .padding({ left: 16, right: 16, bottom: 8 })
             }
-            .padding({ left: 16, right: 16 })
+            .layoutWeight(1)
+            .scrollBar(BarState.Off)
           } else if (!this.busy && this.pdfText) {
             Text('未识别到有效账单记录')
               .fontSize(14)
@@ -187,17 +237,17 @@ struct BookkeepingConfirmPage {
 
           if (!this.busy && this.suggestions.length > 0) {
             GlassButton({
-              label: '全部保存到记账',
+              label: `保存选中 (${this.getSelectedCount()})`,
               dark: this.dark,
               heightVp: 48,
               fontSize: 15,
-              onClickHandler: () => this.onSaveAll()
+              onClickHandler: () => this.onSaveSelected()
             })
           }
         }
         .width('100%')
         .layoutWeight(1)
-        .padding(20)
+        .padding({ left: 20, right: 20, top: 8, bottom: 16 })
         .justifyContent(FlexAlign.Start)
       }
       .width('100%')

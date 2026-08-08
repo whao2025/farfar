@@ -272,7 +272,7 @@ export async function applyEditsAsync(srcPath: string, outPath: string, ops: Edi
   const counts: number[] = [];
   for (const op of ops) {
     if (op.op === 'addText') {
-      kinds.push(1); pages.push(op.page); xs.push(op.color); ys.push(op.x); ws.push(op.y); hs.push(0); texts.push(op.text); nums.push(op.size); counts.push(1);
+      kinds.push(1); pages.push(op.page); xs.push(op.x); ys.push(op.y); ws.push(op.size); hs.push(0); texts.push(op.text); nums.push(op.color); counts.push(1);
     } else if (op.op === 'addImage') {
       kinds.push(2); pages.push(op.page); xs.push(op.x); ys.push(op.y); ws.push(op.width); hs.push(op.height); texts.push(op.imagePath); nums.push(0); counts.push(1);
     } else if (op.op === 'addHighlight') {

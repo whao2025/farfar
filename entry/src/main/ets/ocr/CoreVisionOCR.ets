@@ -1,16 +1,43 @@
 import { pdfService } from '@kit.PDFKit';
 import { textRecognition } from '@kit.CoreVisionKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { fileIo } from '@kit.CoreFileKit';
+import { common } from '@kit.AbilityKit';
+import { util } from '@kit.ArkTS';
+import { image } from '@kit.ImageKit';
 import { OCRResult, OCRPage, TextBlock, TextLine, OCROptions, OCRProgress } from './OCRTypes';
 import { OCRService } from './OCRService';
+import { runOcrSession } from '../utils/OcrLock';
 
 const MAX_RETRY = 2;
 const DEFAULT_FONT_SIZE = 12;
+const UPSCALE = 2;
+const CACHE_DIR = 'ocr_cache';
 
 export class CoreVisionOCR implements OCRService {
   private inited: boolean = false;
+  private context: common.Context | null = null;
+
+  configure(context?: common.Context): void {
+    this.context = context ?? null;
+  }
 
   async recognize(pdfPath: string, options?: OCROptions, onProgress?: (p: OCRProgress) => void): Promise<OCRResult> {
+    const cachePath = await this.resolveCachePath(pdfPath, options);
+    if (cachePath.length > 0) {
+      const hit = await this.readCache(cachePath);
+      if (hit) {
+        return hit;
+      }
+    }
+    const result = await runOcrSession(async () => this.doRecognize(pdfPath, options, onProgress));
+    if (cachePath.length > 0 && result.pages.length > 0) {
+      await this.writeCache(cachePath, result);
+    }
+    return result;
+  }
+
+  private async doRecognize(pdfPath: string, options?: OCROptions, onProgress?: (p: OCRProgress) => void): Promise<OCRResult> {
     let doc: pdfService.PdfDocument | null = null;
     try {
       doc = new pdfService.PdfDocument();
@@ -76,10 +103,30 @@ export class CoreVisionOCR implements OCRService {
         return [];
       }
       try {
-        const res = await textRecognition.recognizeText({ pixelMap: pixelMap });
-        return this.parseResult(res, page);
-      } catch (err) {
-        console.error('recognizeText failed attempt=' + attempt, JSON.stringify(err));
+        const up = await this.upscalePixelMap(pixelMap);
+        const merged: TextBlock[] = [];
+        if (up) {
+          try {
+            const upRes = await textRecognition.recognizeText({ pixelMap: up });
+            const upBlocks = this.parseResult(upRes, page, UPSCALE);
+            merged.push(...upBlocks);
+          } catch (err) {
+            console.error('recognizeText upscaled failed attempt=' + attempt, JSON.stringify(err));
+          } finally {
+            up.release();
+          }
+        }
+        try {
+          const res = await textRecognition.recognizeText({ pixelMap: pixelMap });
+          const blocks = this.parseResult(res, page, 1);
+          merged.push(...blocks);
+        } catch (err) {
+          console.error('recognizeText failed attempt=' + attempt, JSON.stringify(err));
+        }
+        if (merged.length === 0) {
+          continue;
+        }
+        return this.mergeBlocks(merged);
       } finally {
         pixelMap.release();
       }
@@ -87,10 +134,33 @@ export class CoreVisionOCR implements OCRService {
     return [];
   }
 
-  private parseResult(res: textRecognition.TextRecognitionResult, page: pdfService.PdfPage): TextBlock[] {
+  private async upscalePixelMap(pm: image.PixelMap): Promise<image.PixelMap | null> {
+    try {
+      return await pm.createScaledPixelMap(UPSCALE, UPSCALE);
+    } catch (err) {
+      console.error('upscale failed', JSON.stringify(err));
+      return null;
+    }
+  }
+
+  private mergeBlocks(all: TextBlock[]): TextBlock[] {
+    const seen = new Set<string>();
+    const out: TextBlock[] = [];
+    for (const b of all) {
+      const key = b.text.trim() + '_' + Math.round(b.x) + '_' + Math.round(b.y);
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(b);
+      }
+    }
+    return out;
+  }
+
+  private parseResult(res: textRecognition.TextRecognitionResult, page: pdfService.PdfPage, scale: number): TextBlock[] {
     const blocks: TextBlock[] = [];
     const pageH = this.pageHeightOf(page);
     const raw = res.blocks;
+    const div = scale > 0 ? scale : 1;
     for (let i = 0; i < raw.length; i++) {
       const b = raw[i];
       const lines: TextLine[] = [];
@@ -120,10 +190,10 @@ export class CoreVisionOCR implements OCRService {
         }
         lines.push({
           text: ln.value,
-          x: pts.length >= 2 ? pts[0].x : 0,
-          y: pts.length >= 2 ? pts[0].y : 0,
-          width: pts.length >= 2 ? (maxX - minX) : 0,
-          height: pts.length >= 2 ? (maxY - minY) : 0
+          x: pts.length >= 2 ? pts[0].x / div : 0,
+          y: pts.length >= 2 ? pts[0].y / div : 0,
+          width: pts.length >= 2 ? (maxX - minX) / div : 0,
+          height: pts.length >= 2 ? (maxY - minY) / div : 0
         });
       }
       if (minX === Number.MAX_VALUE) {
@@ -141,10 +211,10 @@ export class CoreVisionOCR implements OCRService {
       blocks.push({
         id: 'b' + i,
         text: b.value,
-        x: minX,
-        y: pageH - maxY,
-        width: maxX - minX,
-        height: maxY - minY,
+        x: minX / div,
+        y: pageH - maxY / div,
+        width: (maxX - minX) / div,
+        height: (maxY - minY) / div,
         fontSize: DEFAULT_FONT_SIZE,
         fontName: undefined,
         confidence: 1,
@@ -152,6 +222,65 @@ export class CoreVisionOCR implements OCRService {
       });
     }
     return blocks;
+  }
+
+  private async resolveCachePath(pdfPath: string, options?: OCROptions): Promise<string> {
+    if (!this.context) {
+      return '';
+    }
+    try {
+      const st = await fileIo.stat(pdfPath);
+      const dir = this.context.filesDir + '/' + CACHE_DIR;
+      await this.ensureDir(dir);
+      const start = options?.startPage ?? 0;
+      const end = options?.endPage ?? 'all';
+      const name = st.size + '_' + st.mtime + '_p' + start + '-' + end + '.json';
+      return dir + '/' + this.sanitize(name);
+    } catch (err) {
+      console.error('resolveCachePath failed', JSON.stringify(err));
+      return '';
+    }
+  }
+
+  private sanitize(name: string): string {
+    return name.replace(/[\\/:*?"<>|]/g, '_');
+  }
+
+  private async ensureDir(dir: string): Promise<void> {
+    try {
+      await fileIo.mkdir(dir);
+    } catch (err) {
+      // 目录已存在时忽略
+    }
+  }
+
+  private async readCache(path: string): Promise<OCRResult | null> {
+    try {
+      const text = await fileIo.readText(path);
+      if (!text) {
+        return null;
+      }
+      const parsed = JSON.parse(text) as OCRResult;
+      return parsed;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  private async writeCache(path: string, result: OCRResult): Promise<void> {
+    try {
+      const text = JSON.stringify(result);
+      const encoder = new util.TextEncoder();
+      const buf = encoder.encodeInto(text).buffer;
+      const file = await fileIo.open(path, fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
+      try {
+        await fileIo.write(file.fd, buf);
+      } finally {
+        await fileIo.close(file.fd);
+      }
+    } catch (err) {
+      console.error('writeCache failed', JSON.stringify(err));
+    }
   }
 
   private async initSafe(): Promise<boolean> {

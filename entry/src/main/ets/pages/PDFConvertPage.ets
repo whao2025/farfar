@@ -9,7 +9,7 @@ import { GlassToolbar } from '../components/GlassToolbar';
 import { GlassButton } from '../components/GlassButton';
 import { pdfToImagesAsync, imagesToPdfAsync, listFiles } from '../utils/PDFConvertUtils';
 import { extractTextAsync } from '../utils/PDFEditUtils';
-import { ocrPdfAsync } from '../utils/PDFOCRUtils';
+import { extractTextWithOCRFallback, isAllPageMarkers } from '../utils/PDFOCRUtils';
 import { saveSandboxFile } from '../utils/PickerSaveUtils';
 import { pickAndCopyPDF } from '../utils/PDFImportUtils';
 
@@ -202,13 +202,13 @@ struct PDFConvertPage {
         return;
       }
       this.statusMsg = '提取文本中…';
-      let text = await extractTextAsync(srcPath);
-      let usedOcr: boolean = false;
-      if (!(text && text.trim().length > 0)) {
+      const raw = await extractTextAsync(srcPath);
+      const ocrNeeded = raw.trim().length === 0 || isAllPageMarkers(raw);
+      if (ocrNeeded) {
         this.statusMsg = '检测到扫描件，正在 OCR 识别…';
-        text = await ocrPdfAsync(srcPath);
-        usedOcr = text !== null && text.trim().length > 0;
       }
+      const text = await extractTextWithOCRFallback(srcPath, raw);
+      const usedOcr = ocrNeeded;
       if (!text || !text.trim()) {
         this.showToast('未提取到文本，请确认 PDF 可识别');
         this.busy = false;
