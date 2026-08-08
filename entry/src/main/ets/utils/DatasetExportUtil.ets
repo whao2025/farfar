@@ -19,6 +19,24 @@ export interface TrainingRecord {
   confidence: number;
 }
 
+interface ExportRecord {
+  id: number;
+  text: string;
+  category: string;
+  type: 'expense' | 'income';
+  amount: number;
+  merchant: string;
+  source: RecordSource;
+  confidence: number;
+}
+
+interface ExportPayload {
+  version: string;
+  exportDate: string;
+  recordCount: number;
+  records: ExportRecord[];
+}
+
 export class DatasetExportUtil {
   private db: relationalStore.RdbStore | null = null;
   private static instance: DatasetExportUtil | null = null;
@@ -85,7 +103,7 @@ export class DatasetExportUtil {
   }
 
   async exportToJSON(filePath: string, records: TrainingRecord[]): Promise<void> {
-    const data = {
+    const data: ExportPayload = {
       version: '1.0',
       exportDate: new Date().toISOString(),
       recordCount: records.length,
@@ -98,7 +116,7 @@ export class DatasetExportUtil {
         merchant: r.merchant || '',
         source: r.source,
         confidence: r.confidence
-      }))
+      }) as ExportRecord)
     };
 
     const content = JSON.stringify(data, null, 2);

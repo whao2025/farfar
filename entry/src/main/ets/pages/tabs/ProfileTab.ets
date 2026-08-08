@@ -7,12 +7,16 @@ import { AutoCategorizer } from '../../utils/AutoCategorizer';
 import { RuleCategorizer } from '../../utils/RuleCategorizer';
 import { getBillClassifier } from '../../utils/ml/BillClassifier';
 import { Suggestion } from '../../model/RecordModel';
+import { datasetExportUtil, TrainingRecord } from '../../utils/DatasetExportUtil';
+import { saveSandboxFile } from '../../utils/PickerSaveUtils';
+import { fileIo } from '@kit.CoreFileKit';
 
 @Component
 export struct ProfileTab {
   @StorageProp('darkMode') dark: boolean = false;
   @State versionName: string = '';
   @State mlEnabled: boolean = false;
+  @State exporting: boolean = false;
 
   aboutToAppear(): void {
     this.loadVersion();
@@ -74,6 +78,54 @@ export struct ProfileTab {
     }
   }
 
+  private async onExportTrainingData(): Promise<void> {
+    const host = this.getUIContext().getHostContext();
+    if (!host) {
+      this.getUIContext().getPromptAction().showToast({ message: '导出失败' });
+      return;
+    }
+    if (this.exporting) {
+      return;
+    }
+    this.exporting = true;
+    const ctx = host as common.Context;
+    let outPath: string = '';
+    try {
+      await datasetExportUtil.init(ctx);
+      let records: TrainingRecord[] = [];
+      try {
+        records = await datasetExportUtil.getAllRecords();
+      } catch (err) {
+        console.error('getAllRecords failed', JSON.stringify(err));
+        records = [];
+      }
+      if (records.length === 0) {
+        this.getUIContext().getPromptAction().showToast({ message: '暂无已确认记录' });
+        return;
+      }
+      outPath = ctx.filesDir + '/training_' + Date.now() + '.json';
+      await datasetExportUtil.exportToJSON(outPath, records);
+      const saved = await saveSandboxFile(ctx, outPath, 'freepdf_training_data.json', '.json');
+      if (saved) {
+        this.getUIContext().getPromptAction().showToast({ message: `已导出 ${records.length} 条记录` });
+      } else {
+        this.getUIContext().getPromptAction().showToast({ message: '已生成，未选择导出位置' });
+      }
+    } catch (err) {
+      console.error('export training data failed', JSON.stringify(err));
+      this.getUIContext().getPromptAction().showToast({ message: '导出失败' });
+    } finally {
+      if (outPath) {
+        try {
+          await fileIo.unlink(outPath);
+        } catch (err) {
+          console.error('cleanup temp export failed', JSON.stringify(err));
+        }
+      }
+      this.exporting = false;
+    }
+  }
+
   private onToggleDark(isOn: boolean): void {
     AppStorage.setOrCreate('darkMode', isOn);
     AppStorage.setOrCreate('userDarkModeOverride', true);
@@ -86,7 +138,8 @@ export struct ProfileTab {
   }
 
   build() {
-    Column({ space: 16 }) {
+    Scroll() {
+      Column({ space: 16 }) {
       Column({ space: 12 }) {
         Text('我的')
           .fontSize(18)
@@ -139,6 +192,37 @@ export struct ProfileTab {
 
       Column({ space: 0 }) {
         Row() {
+          Column({ space: 4 }) {
+            Text('导出训练数据')
+              .fontSize(15)
+              .fontColor(this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
+            Text('已确认记账数据，供本地模型训练')
+              .fontSize(12)
+              .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
+          }
+          .alignItems(HorizontalAlign.Start)
+          Blank()
+          Text(this.exporting ? '导出中…' : '›')
+            .fontSize(20)
+            .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
+        }
+        .width('100%')
+        .padding({ left: 20, right: 20, top: 14, bottom: 14 })
+        .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.98 })
+        .enabled(!this.exporting)
+        .onClick(() => {
+          this.onExportTrainingData();
+        })
+      }
+      .width('100%')
+      .borderRadius(16)
+      .backgroundBlurStyle(GlassTokens.BLUR_PANEL)
+      .backgroundColor(this.dark ? GlassTokens.BG_DARK : GlassTokens.BG_LIGHT)
+      .border({ width: 1, color: this.dark ? GlassTokens.BORDER_DARK : GlassTokens.BORDER_LIGHT })
+      .shadow(GlassTokens.SHADOW)
+
+      Column({ space: 0 }) {
+        Row() {
           Text('隐私政策')
             .fontSize(15)
             .fontColor(this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
@@ -165,11 +249,13 @@ export struct ProfileTab {
         .fontSize(12)
         .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
         .margin({ top: 8 })
+}
+      .width('100%')
+      .padding(24)
+      .alignItems(HorizontalAlign.Center)
+      .justifyContent(FlexAlign.Start)
     }
-    .width('100%')
-    .height('100%')
-    .padding(24)
-    .alignItems(HorizontalAlign.Center)
-    .justifyContent(FlexAlign.Center)
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring)
   }
 }
