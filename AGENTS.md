@@ -65,6 +65,7 @@
 - `BudgetPreferences`：单例 `budgetPrefs`；`init/getMonthlyBudget/setMonthlyBudget/getBudgetConfig（daily=monthly/30, weekly=monthly/(30/7), monthly）`.getDailyBudget/getWeeklyBudget/isFirstLaunch/setLaunched/close`；prefs `freepdf_budget_prefs` 键 `monthly_budget`/`launched_before`。
 
 ## PDF 编辑与转换
+- ⚠️ **产品定位**：编辑 PDF 的「识别字体 / 改字」主要对象是**文字型 PDF**（如 Excel 导出、含文本层与嵌入字体的报表）；图片/扫描型走 OCR **作为兜底保留**。**表格型文字 PDF 的文本块与字号/字体恢复是优先打磨点**（listTextObjects 块定位精度、FontMatcher 精确匹配嵌入字体、PdfServiceRewriter 复用 fontInfo 原位替换）。
 - `PDFEditUtils`：`EditTextOp/EditImageOp/EditHighlightOp/EditTextAnnotOp/EditInsertBlankOp/EditDeletePageOp/EditMergeOp/EditRewriteTextOp`（union `EditOp`，各带判别 `op` 字段）+ `EditResult{success,error?,newPageCount?}`；`extractTextAsync(srcPath):Promise<string>`（文本型全文提取）、`listTextObjectsAsync(srcPath,pageIndex):Promise<TextObjectResult>`、`applyEditsAsync(srcPath,outPath,ops:EditOp[],newDoc):Promise<EditResult>`。
 - PDF 编辑页操作：添加文本/图片/高亮/文字标注、改字(listTextObjects→选块→改字)、插删页、合并；支持 undo(ops 栈)、撤销/返回。⚠️ OCR 模式：工具条第 9 项「OCR」→ `ocrMode` 状态，`createOCRService().recognize` 识别当前页 → Overlay 叠加 `ocrBlockBox`（块坐标 px→PDF 左下原点，可点击）→ `promptTextInput` 编辑 → `placeAt` 生成 addTextOp；`ocrBusy/ocrProgress/ocrBlocks` 状态驱动。
 - `PDFConvertUtils`（`@Concurrent`，可空生命周期，PdfDocument 用 let|null，releaseDocument 放 finally 并判空）：`pdfToImages`/`imagesToPdf`/`pdfToText`/`pdfToTxt`；目标追加模式需 safeIndex 枚举。

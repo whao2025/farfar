@@ -2,15 +2,19 @@
 
 ## 当前版本：v0.4 (PDF编辑核心完成)
 
+## 产品定位（编辑/改字）
+> **编辑 PDF 的「识别字体 / 改字」主要对象是文字型 PDF**（如 Excel 导出、含文本层与嵌入字体的报表）；图片/扫描型走 OCR **作为兜底保留**。**表格型文字 PDF 的文本块与字号/字体恢复是优先打磨点**（listTextObjects 块定位精度、FontMatcher 精确匹配嵌入字体、PdfServiceRewriter 复用 fontInfo 原位替换）。
+
 ### ✅ 已完成 (v0.1-v0.4)
 - [x] PDF查看/编辑/转换基础框架
 - [x] 记账功能(解析/分类/确认/统计)
 - [x] PDF编辑核心：fontInfo修复、screenToPdf坐标换算、Overlay点击放置、死代码清理
 - [x] 缓存优化：HR 99.9%、AGENTS.md纪律化
+- [x] 构建警告清零：153 → 0（try/catch + canIUse 全量收敛）
 
 ### 🔄 进行中 (v0.5) - 当前冲刺
+- [ ] 文字型 PDF 改字精度打磨（表格型文字 PDF 文本块/字号/字体恢复优先）
 - [ ] 真机全流程验收 (TEST_CHECKLIST.md 7项)
-- [ ] 死代码彻底清理编译0警告
 - [ ] ProfileTab 我的栏目完善 (About/Feedback/Storage/Backup/Help/License)
 - [ ] ProfileTab 字段理顺 + 编译0警告
 
