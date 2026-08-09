@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-08-09 | 改字精度打磨 v0.5 | 文字型 PDF 页面点选改字
+- **完成**（review 审查后修正 2 处）：
+  - 改字入口改为**页面点选**：`PDFEditPage` tool=4 → 拉块 → 虚线框（charRects 包围盒）→ 点击命中 → 内联编辑面板（原文预填、字号折叠默认沿用原字号、字体提示原字体/回退）；确认后块框显示新文字预览（derived from ops，undo 自动清预览）；删除旧序号列表对话框（blockListContent/blockListId/onPickBlock）
+  - `PDFEditUtils`：`TextBlockInfo` 扩展 x/y/width/height/fontName；`runListTextObjects` 以 `charRects` 求块包围盒（左右/下距离语义，P0 真机核验），无 charRects 按字号估宽；`listTextObjectsAsync` 透传
+  - review 修正：PdfServiceRewriter/PDFRewriter 为死代码（createPDFRewriter 零引用），**未改**；runEditOps 已复用 fontInfo 原位替换，fontName 不参与回写；FontMatcher 只在主线程做回退提示
+  - `onOverlayTouch` 分流 tool=4 → `onRewriteBlockTap`；`reloadPDF 保存后重置改字状态
+- **验证**: `build.ps1 -Mode release -Clean` WARN 0、BUILD SUCCESSFUL（40s）
+- **待办**: 真机 M1 验收 —— 点击命中精度 + charRects 坐标系 P0 核验
+- **卡点**: charRects 坐标系语义未真机验证（"距对应页面边缘"解释属推测）
+- **分支**: master
+- **Commit**: (本次)
+
+---
+
 ## 2026-08-09 | WARN 清零优化 | freepdf 构建警告清理
 - **完成**: 全量构建 WARN 153 → 0（Clean release BUILD SUCCESSFUL）
   - 死代码: AutoCategorizer.ets autoCategorizer 别名删除

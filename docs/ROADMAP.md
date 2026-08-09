@@ -13,7 +13,12 @@
 - [x] 构建警告清零：153 → 0（try/catch + canIUse 全量收敛）
 
 ### 🔄 进行中 (v0.5) - 当前冲刺
-- [ ] 文字型 PDF 改字精度打磨（表格型文字 PDF 文本块/字号/字体恢复优先）
+- [x] 文字型 PDF 改字精度打磨 v0.5（页面点选定位已落地）：
+  - [x] 改字入口从"序号列表对话框"改为**页面点选**：进入改字(tool=4) → 拉取当前页文本块矩形 → 虚线框标注 → 点击块 → 内联编辑面板（原文预填 + 字号折叠可选）
+  - [x] `TextBlockInfo` 扩展 x/y/width/height/fontName；`runListTextObjects` 用 `charRects` 求块包围盒（P0 真机核验坐标系），无 charRects 按字号估宽兜底
+  - [x] 字体/字号保留：worker ≥fontInfo 复用原位替换；主线程 FontMatcher 判定回退，面板显示"原字体（已匹配XX）/将回退"提示
+  - [x] 预览浮层 derived from ops：确认后块框显示新文字，undo 自动清预览
+  - [ ] M1 真机：click 命中 precision + charRects 坐标系核验（P0 遗留）
 - [ ] 真机全流程验收 (TEST_CHECKLIST.md 7项)
 - [ ] ProfileTab 我的栏目完善 (About/Feedback/Storage/Backup/Help/License)
 - [ ] ProfileTab 字段理顺 + 编译0警告

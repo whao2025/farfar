@@ -5,6 +5,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { image } from '@kit.ImageKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { GlassTokens } from '../theme/GlassTokens';
+import { FontMatcher } from '../layout/FontMatcher';
 import { GlassToolbar } from '../components/GlassToolbar';
 import { GlassButton } from '../components/GlassButton';
 import { applyEditsAsync, EditOp, EditTextOp, EditImageOp, EditHighlightOp, EditTextAnnotOp, EditInsertBlankOp, EditDeletePageOp, EditMergeOp, EditRewriteTextOp, TextBlockInfo, TextObjectResult, listTextObjectsAsync, getPageSizeAsync } from '../utils/PDFEditUtils';
@@ -40,9 +41,15 @@ struct PDFEditPage {
   @State loadResult: pdfService.ParseResult = pdfService.ParseResult.PARSE_ERROR_FORMAT
   @State saving: boolean = false;
   @State statusMsg: string = '';
-  @State textBlocks: Array<TextBlockInfo> = [];
+  @State rewriteBlocks: Array<TextBlockInfo> = [];
   @State activedTool: number = -1;
   @State canUndo: boolean = false;
+  @State rewritePanelOpen: boolean = false;
+  @State rewriteInput: string = '';
+  @State rewriteSizeExpanded: boolean = false;
+  @State rewritePreviewTick: number = 0;
+  @State rewritePreviews: Array<string> = [];
+  private rewriteSize: string = '';
   @State highlightColor: number = 0xFFC300;
   @State highlightWidth: number = 200;
   @State overlayW: number = 0;
@@ -56,8 +63,7 @@ struct PDFEditPage {
   @State ocrBusy: boolean = false;
   @State ocrProgress: number = 0;
   @State ocrBlocks: TextBlock[] = [];
-  private selectedBlockIndex: number = -1;
-  private blockListId: number = -1;
+  private rewriteSelected: number = -1;
   private ops: EditOp[] = [];
   private ocrService: OCRService = createOCRService();
   private touchStartX: number = -1;
@@ -87,10 +93,21 @@ struct PDFEditPage {
       return;
     }
     const op = this.ops.pop();
+    if (op && op.op === 'rewriteText') {
+      const idx = this.rewriteBlocks.findIndex((b) => b.index === op.index);
+      if (idx >= 0 && idx < this.rewritePreviews.length) {
+        const arr: Array<string> = this.rewritePreviews.slice();
+        arr[idx] = '';
+        this.rewritePreviews = arr;
+      }
+      this.rewritePreviewTick = this.rewritePreviewTick + 1;
+      this.statusMsg = '已撤回改字修改';
+    } else {
+      this.statusMsg = op ? '已撤回上一步操作' : '';
+    }
     this.opsCount = this.ops.length;
     this.canUndo = this.ops.length > 0;
     this.selectedOpIndex = -1;
-    this.statusMsg = op ? '已撤回上一步操作' : '';
   }
 
   aboutToAppear(): void {
@@ -221,67 +238,204 @@ struct PDFEditPage {
   }
 
   @Builder
-  private blockListContent(title: string) {
+  private rewriteBlockBox(block: TextBlockInfo, idx: number) {
+    Stack() {
+      Text(this.showRewriteText(block, idx))
+        .fontSize(11)
+        .fontColor(this.dark ? '#9EC6FF' : '#2A6FDB')
+        .maxLines(1)
+    }
+    .position({ x: this.rewriteBlockPxX(block), y: this.rewriteBlockPxY(block) })
+    .width(this.rewriteBlockPxW(block))
+    .height(this.rewriteBlockPxH(block))
+    .padding({ left: 4, right: 4 })
+    .borderRadius(2)
+    .border({ width: 1, color: this.rewriteSelected === block.index ? '#4C9AFF' : 'rgba(76,154,255,0.45)', style: BorderStyle.Dashed })
+    .backgroundColor(this.rewriteSelected === block.index ? 'rgba(76,154,255,0.22)' : 'rgba(76,154,255,0.06)')
+  }
+
+  private rewriteBlockScale(): number {
+    return this.ocrBlockScale();
+  }
+
+  private rewriteBlockPxX(block: TextBlockInfo): number {
+    return block.x * this.rewriteBlockScale();
+  }
+
+  private rewriteBlockPxY(block: TextBlockInfo): number {
+    const hpt = this.pageHeightPt();
+    return (hpt - block.y - block.height) * this.rewriteBlockScale();
+  }
+
+  private rewriteBlockPxW(block: TextBlockInfo): number {
+    return block.width * this.rewriteBlockScale();
+  }
+
+  private rewriteBlockPxH(block: TextBlockInfo): number {
+    return block.height * this.rewriteBlockScale();
+  }
+
+  private showRewriteText(block: TextBlockInfo, idx: number): string {
+    const preview = this.rewritePreviewText(idx);
+    if (preview.length > 0) {
+      return preview.length > 20 ? preview.substring(0, 20) + '…' : preview;
+    }
+    return block.text.length > 20 ? block.text.substring(0, 20) + '…' : block.text;
+  }
+
+  @Builder
+  private rewriteEditPanel() {
     Column({ space: 12 }) {
-      Text(title)
+      Text(`修改文字（第 ${this.currentPage + 1} 页 · ${this.rewriteBlocks.length} 块）`)
         .fontSize(16)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
-      Scroll() {
-        Column({ space: 8 }) {
-          ForEach(this.textBlocks, (block: TextBlockInfo) => {
-            Row() {
-              Text(`第 ${block.index + 1} 块`)
-                .fontSize(12)
-                .fontColor(this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
-              Blank()
-              Text(block.text.length > 12 ? block.text.substring(0, 12) + '…' : block.text)
-                .fontSize(13)
-                .fontColor(this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
-                .maxLines(1)
-              Blank()
-              Text(`${block.size}pt`)
-                .fontSize(12)
-                .fontColor('#888888')
-            }
-            .width('100%')
-            .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-            .borderRadius(12)
-            .backgroundBlurStyle(GlassTokens.BLUR_BUTTON)
-            .backgroundColor(this.dark ? GlassTokens.BG_DARK : GlassTokens.BG_LIGHT)
-            .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.98 })
-            .onClick(() => {
-              this.onPickBlock(block.index)
-            })
-          }, (block: TextBlockInfo) => `${block.index}`)
+      if (this.rewriteSelected >= 0 && this.rewriteSelected < this.rewriteBlocks.length) {
+        TextArea({ text: this.rewriteInput })
+          .height(90)
+          .width('100%')
+          .fontSize(14)
+          .onChange((v: string) => {
+            this.rewriteInput = v;
+          })
+        if (this.rewriteSizeExpanded) {
+          Row({ space: 8 }) {
+            Text('字号')
+              .fontSize(13)
+              .fontColor(this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
+            TextInput({ text: this.rewriteSizeValue() })
+              .type(InputType.Number)
+              .layoutWeight(1)
+              .height(38)
+              .fontSize(14)
+              .onChange((v: string) => {
+                this.rewriteSize = v;
+              })
+          }
+          .width('100%')
+        } else {
+          Text(`字号：沿用原文 ${this.rewriteSizeValue()}pt（点击上方「字号」可调整）`)
+            .fontSize(12)
+            .fontColor('#888888')
         }
-        .width('100%')
+        Text(this.rewriteFontHint())
+          .fontSize(11)
+          .fontColor(this.dark ? '#A9A9B5' : '#8A8A96')
       }
-      .layoutWeight(1)
-      .width('100%')
-      .scrollable(ScrollDirection.Vertical)
-      .scrollBar(BarState.Off)
-
       Row({ space: 12 }) {
         GlassButton({
-          label: '取消', dark: this.dark, heightVp: 40, fontSize: 14, widthVp: 100,
+          label: '字号',
+          dark: this.dark,
+          heightVp: 40,
+          fontSize: 14,
+          widthVp: 90,
           onClickHandler: () => {
-            this.getUIContext().getPromptAction().closeCustomDialog(this.blockListId);
+            this.rewriteSizeExpanded = !this.rewriteSizeExpanded;
+          }
+        })
+        Blank()
+        GlassButton({
+          label: '取消',
+          dark: this.dark,
+          heightVp: 40,
+          fontSize: 14,
+          widthVp: 90,
+          onClickHandler: () => {
+            this.rewritePanelOpen = false;
+            this.rewriteSelected = -1;
           }
         })
         GlassButton({
-          label: '确定', dark: this.dark, heightVp: 40, fontSize: 14, widthVp: 100,
+          label: '确定',
+          dark: this.dark,
+          heightVp: 40,
+          fontSize: 14,
+          widthVp: 90,
           onClickHandler: () => {
-            this.getUIContext().getPromptAction().closeCustomDialog(this.blockListId);
+            this.confirmRewrite();
           }
         })
       }
+      .width('100%')
+      Button('收起')
+        .fontSize(12)
+        .fontColor(this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
+        .backgroundColor(Color.Transparent)
+        .width(64)
+        .onClick(() => {
+          this.activedTool = -1;
+        })
     }
     .padding(24)
+    .width('92%')
     .backgroundBlurStyle(GlassTokens.BLUR_MODAL)
     .backgroundColor(this.dark ? GlassTokens.BG_DARK : GlassTokens.BG_LIGHT)
     .borderRadius(20)
     .border({ width: 1, color: this.dark ? GlassTokens.BORDER_DARK : GlassTokens.BORDER_LIGHT })
+    .shadow(GlassTokens.SHADOW)
+  }
+
+  private confirmRewrite(): void {
+    if (this.rewriteSelected < 0 || this.rewriteSelected >= this.rewriteBlocks.length) {
+      return;
+    }
+    const block = this.rewriteBlocks[this.rewriteSelected];
+    const newText = this.rewriteInput.trim();
+    if (!newText) {
+      this.showToast('请输入文字内容');
+      return;
+    }
+    let newSize = block.size;
+    if (this.rewriteSizeExpanded) {
+      const parsed = parseInt(this.rewriteSize, 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        newSize = parsed;
+      }
+    }
+    this.pushOp({
+      op: 'rewriteText',
+      page: this.currentPage,
+      index: block.index,
+      newText: newText,
+      newSize: newSize
+    } as EditRewriteTextOp);
+    if (this.rewriteSelected >= 0 && this.rewriteSelected < this.rewritePreviews.length) {
+      const arr: Array<string> = this.rewritePreviews.slice();
+      arr[this.rewriteSelected] = newText;
+      this.rewritePreviews = arr;
+    }
+    this.rewriteSelected = -1;
+    this.rewritePanelOpen = false;
+    this.rewriteSizeExpanded = false;
+    this.rewritePreviewTick = this.rewritePreviewTick + 1;
+    this.statusMsg = `已修改文字（保存后生效）`;
+  }
+
+  private rewritePreviewText(idx: number): string {
+    const p = this.rewritePreviews[idx];
+    return p && p.length > 0 ? p : '';
+  }
+
+  private rewriteFontHint(): string {
+    if (this.rewriteSelected < 0 || this.rewriteSelected >= this.rewriteBlocks.length) {
+      return '';
+    }
+    const font = this.rewriteBlocks[this.rewriteSelected].fontName;
+    if (!font || font.trim().length === 0) {
+      return '原字体未知，保存时回退系统字体 HarmonyOS Sans';
+    }
+    const matched = FontMatcher.matchFont(font);
+    if (matched.fallback) {
+      return `原字体「${font}」将尽量保留，必要时自动回退为系统字体`;
+    }
+    return `原字体：${font}（已匹配 ${matched.fontName}）`;
+  }
+
+  private rewriteSizeValue(): string {
+    if (this.rewriteSelected >= 0 && this.rewriteSelected < this.rewriteBlocks.length) {
+      return `${this.rewriteBlocks[this.rewriteSelected].size}`;
+    }
+    return '0';
   }
 
   private promptTextInput(title: string, placeholder: string, onConfirm: (value: string) => void): void {
@@ -350,6 +504,10 @@ struct PDFEditPage {
       }
       const sp = this.scrollParam;
       if (!sp || sp.pdfWidth <= 0 || sp.pdfHeight <= 0) {
+        return;
+      }
+      if (this.activedTool === 4) {
+        this.onRewriteBlockTap(t.x, t.y);
         return;
       }
       const pos = this.screenToPdf(t.x, t.y, sp, this.controller.getPageZoom());
@@ -895,75 +1053,73 @@ struct PDFEditPage {
   }
 
   private onRewriteText(): void {
+    if (this.activedTool === 4) {
+      this.activedTool = -1;
+      this.rewriteBlocks = [];
+      this.rewriteSelected = -1;
+      this.rewritePanelOpen = false;
+      return;
+    }
     this.activedTool = 4;
+    this.rewriteSelected = -1;
+    this.rewritePanelOpen = false;
+    this.rewriteInput = '';
+    this.rewriteSize = '';
+    this.rewriteSizeExpanded = false;
     this.rewriteAsync();
   }
 
   private async rewriteAsync(): Promise<void> {
     if (!this.filePath) {
+      this.activedTool = -1;
       this.showToast('请先打开一个 PDF 文件');
       return;
     }
     try {
       const result: TextObjectResult = await listTextObjectsAsync(this.filePath, this.currentPage);
       if (!result.ok) {
+        this.activedTool = -1;
         this.showToast('读取文本块失败（文件可能已损坏）');
         return;
       }
       if (result.blocks.length === 0) {
+        this.activedTool = -1;
         this.showToast('此页无文本或为扫描版，无法修改');
         return;
       }
-      this.textBlocks = result.blocks;
-      const uiCtx = this.getUIContext();
-      uiCtx.getPromptAction().openCustomDialog({
-        builder: () => {
-          this.blockListContent(`修改文字（第 ${this.currentPage + 1} 页）`)
-        },
-        autoCancel: true
-      }).then((id: number) => {
-        this.blockListId = id;
-      }).catch(() => {
-        console.error('open block list dialog failed');
-      });
+      this.rewriteBlocks = result.blocks;
+      this.rewritePreviews = new Array<string>(result.blocks.length);
+      this.statusMsg = `共 ${result.blocks.length} 个文本块，点击页面文字即可修改`;
     } catch (err) {
+      this.activedTool = -1;
       console.error('list text blocks failed', JSON.stringify(err));
       this.showToast('解析文本块异常，请重试');
     }
   }
 
-  private onPickBlock(index: number): void {
-    try {
-      this.getUIContext().getPromptAction().closeCustomDialog(this.blockListId);
-    } catch (err) {
-      console.error('closeCustomDialog failed:', JSON.stringify(err));
-    }
-    const block = this.textBlocks.find((b) => b.index === index);
-    if (!block) {
+  private onRewriteBlockTap(x: number, y: number): void {
+    const sp = this.scrollParam;
+    if (!sp || sp.pdfWidth <= 0 || sp.pdfHeight <= 0) {
       return;
     }
-    this.selectedBlockIndex = index;
-    this.promptTextInput('修改文字内容', block.text, (value: string) => {
-      if (!value.trim()) {
-        return;
+    const pos = this.screenToPdf(x, y, sp, this.controller.getPageZoom());
+    let hit = -1;
+    for (let i = 0; i < this.rewriteBlocks.length; i++) {
+      const b = this.rewriteBlocks[i];
+      if (pos.x >= b.x && pos.x <= b.x + b.width && pos.y >= b.y && pos.y <= b.y + b.height) {
+        hit = i;
+        break;
       }
-      const newText = value.trim();
-      this.promptTextInput('修改字号（pt）', `${block.size}`, (sizeValue: string) => {
-        const newSize = parseInt(sizeValue, 10);
-        if (isNaN(newSize) || newSize <= 0) {
-          this.showToast('请输入有效字号');
-          return;
-        }
-        this.pushOp({
-          op: 'rewriteText',
-          page: this.currentPage,
-          index: this.selectedBlockIndex,
-          newText: newText,
-          newSize: newSize
-        } as EditRewriteTextOp);
-        this.statusMsg = `已修改文字（保存后生效）`;
-      });
-    });
+    }
+    if (hit < 0) {
+      this.showToast('未命中文本块，请点击文字区域');
+      return;
+    }
+    this.rewriteSelected = hit;
+    this.rewriteInput = this.rewriteBlocks[hit].text;
+    this.rewriteSize = `${this.rewriteBlocks[hit].size}`;
+    this.rewriteSizeExpanded = false;
+    this.rewritePanelOpen = true;
   }
 
   private onMergePDF(): void {
@@ -1027,6 +1183,10 @@ struct PDFEditPage {
         }
         this.bumpRefresh();
         this.clearOps();
+        this.activedTool = -1;
+        this.rewriteBlocks = [];
+        this.rewriteSelected = -1;
+        this.rewritePanelOpen = false;
         this.statusMsg = '';
       } catch (err) {
         const e = err as BusinessError;
@@ -1137,7 +1297,31 @@ struct PDFEditPage {
                 this.ocrBlockBox(block, idx)
               }, (block: TextBlock, idx: number) => block.id + '_' + idx.toString())
             }
-          } else if (this.activedTool >= 0 && this.activedTool <= 3) {
+          } else if (this.activedTool >= 0 && this.activedTool <= 4) {
+            if (this.activedTool === 4) {
+              Stack() {
+                ForEach(this.rewriteBlocks, (block: TextBlockInfo, idx: number) => {
+                  this.rewriteBlockBox(block, idx)
+                }, (block: TextBlockInfo, idx: number) => block.index.toString())
+                if (this.rewritePanelOpen) {
+                  this.rewriteEditPanel()
+                }
+              }
+              .width('100%')
+              .height('100%')
+              .alignContent(Alignment.Bottom)
+              .backgroundColor(Color.Transparent)
+              .onAreaChange((oldArea: Area, newArea: Area) => {
+                this.overlayW = Number(newArea.width);
+                this.overlayH = Number(newArea.height);
+              })
+              .onTouch((event: TouchEvent) => {
+                if (this.rewritePanelOpen) {
+                  return;
+                }
+                this.onOverlayTouch(event);
+              })
+            } else {
             Column() {
               if (this.activedTool === 2) {
                 Column({ space: 8 }) {
@@ -1177,6 +1361,7 @@ struct PDFEditPage {
             .onTouch((event: TouchEvent) => {
               this.onOverlayTouch(event);
             })
+            }
           } else {
             ForEach(this.sessionOpIndexes(), (index: number) => {
               this.sessionObjectBox(index)

@@ -73,6 +73,11 @@ export interface TextBlockInfo {
   index: number;
   text: string;
   size: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontName?: string;
 }
 
 export type EditOp = EditTextOp | EditImageOp | EditHighlightOp | EditTextAnnotOp
@@ -392,7 +397,17 @@ export async function listTextObjectsAsync(srcPath: string, pageIndex: number): 
     }
     const blocks: Array<TextBlockInfo> = [];
     for (let i = 0; i < parsed.texts.length; i++) {
-      blocks.push({ index: i, text: parsed.texts[i], size: parsed.sizes[i] } as TextBlockInfo);
+      const font = parsed.fonts[i];
+      blocks.push({
+        index: i,
+        text: parsed.texts[i],
+        size: parsed.sizes[i],
+        x: parsed.xs[i],
+        y: parsed.ys[i],
+        width: parsed.ws[i],
+        height: parsed.hs[i],
+        fontName: font && font.length > 0 ? font : undefined
+      } as TextBlockInfo);
     }
     return { ok: true, blocks: blocks };
   } catch (err) {
@@ -406,6 +421,11 @@ interface TextBlockListData {
   ok: boolean;
   texts: string[];
   sizes: number[];
+  xs: number[];
+  ys: number[];
+  ws: number[];
+  hs: number[];
+  fonts: string[];
 }
 
 @Concurrent
@@ -415,25 +435,71 @@ function runListTextObjects(srcPath: string, pageIndex: number): string {
     doc = new pdfService.PdfDocument();
     const result = doc.loadDocument(srcPath, '');
     if (result !== pdfService.ParseResult.PARSE_SUCCESS) {
-      const failed: TextBlockListData = { ok: false, texts: [], sizes: [] };
+      const failed: TextBlockListData = { ok: false, texts: [], sizes: [], xs: [], ys: [], ws: [], hs: [], fonts: [] };
       return JSON.stringify(failed);
     }
     const page = doc.getPage(pageIndex);
+    const pageW = page.getWidth ? page.getWidth() : 595;
+    const pageH = page.getHeight ? page.getHeight() : 842;
     const objs = page.getGraphicsObjects();
     const texts: string[] = [];
     const sizes: number[] = [];
+    const xs: number[] = [];
+    const ys: number[] = [];
+    const ws: number[] = [];
+    const hs: number[] = [];
+    const fonts: string[] = [];
     for (const obj of objs) {
       if (obj.type === pdfService.GraphicsObjectType.OBJECT_TEXT) {
         const t = obj as pdfService.TextObject;
         texts.push(t.text);
-        sizes.push(t.textSize);
+        const size = t.textSize > 0 ? t.textSize : 12;
+        sizes.push(size);
+        const rects: Array<pdfService.PdfRect> = t.charRects;
+        if (rects && rects.length > 0) {
+          // PdfRect 各字段为「距对应页面边缘的距离」（doc 语义，P0 真机核验点）：
+          // left=距左缘、right=距右缘、top=距上缘、bottom=距下缘。
+          // 包围盒 = 取各方向距离的最小值，再换算为「距左下原点」的 x/y/w/h。
+          let minL = Number.MAX_VALUE;
+          let minR = Number.MAX_VALUE;
+          let minT = Number.MAX_VALUE;
+          let minB = Number.MAX_VALUE;
+          for (const r of rects) {
+            if (r.left < minL) {
+              minL = r.left;
+            }
+            if (r.right < minR) {
+              minR = r.right;
+            }
+            if (r.top < minT) {
+              minT = r.top;
+            }
+            if (r.bottom < minB) {
+              minB = r.bottom;
+            }
+          }
+          xs.push(minL);
+          ys.push(minB);
+          ws.push(pageW - minR - minL);
+          hs.push(pageH - minT - minB);
+        } else {
+          // 无 charRects 兜底：按字号估宽（每字符 ~0.72 字号宽），y 为基线距底
+          const len = t.text.length > 0 ? t.text.length : 1;
+          xs.push(t.x);
+          ys.push(t.y);
+          ws.push(len * (size * 0.72));
+          hs.push(size * 1.2);
+        }
+        fonts.push(t.fontInfo && t.fontInfo.fontName ? t.fontInfo.fontName : '');
       }
     }
-    const data: TextBlockListData = { ok: true, texts: texts, sizes: sizes };
+    const data: TextBlockListData = {
+      ok: true, texts: texts, sizes: sizes, xs: xs, ys: ys, ws: ws, hs: hs, fonts: fonts
+    };
     return JSON.stringify(data);
   } catch (err) {
     console.error('runListTextObjects failed', JSON.stringify(err));
-    const failed: TextBlockListData = { ok: false, texts: [], sizes: [] };
+    const failed: TextBlockListData = { ok: false, texts: [], sizes: [], xs: [], ys: [], ws: [], hs: [], fonts: [] };
     return JSON.stringify(failed);
   } finally {
     if (doc) {
