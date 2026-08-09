@@ -1,4 +1,4 @@
-import { router, AnimatorOptions, AnimatorResult } from '@kit.ArkUI';
+import { AnimatorOptions, AnimatorResult } from '@kit.ArkUI';
 
 const BG: string = '#0a1429';
 const DURATION: number = 1800;
@@ -145,11 +145,11 @@ struct Splash {
     }
     this.stayTimer = setTimeout(() => {
       this.stayTimer = -1;
-      animateTo({ duration: FADE, curve: Curve.EaseInOut }, () => {
+      this.getUIContext().animateTo({ duration: FADE, curve: Curve.EaseInOut }, () => {
         this.splashOpacity = 0;
       });
       setTimeout(() => {
-        router.replaceUrl({ url: 'pages/Home' });
+        this.getUIContext().getRouter().replaceUrl({ url: 'pages/Home' });
       }, FADE);
     }, STAY);
   }
@@ -204,7 +204,7 @@ struct Splash {
     }
     this.animDone = true;
     setTimeout(() => {
-      router.replaceUrl({ url: 'pages/Home' });
+      this.getUIContext().getRouter().replaceUrl({ url: 'pages/Home' });
     }, 1200);
   }
 }

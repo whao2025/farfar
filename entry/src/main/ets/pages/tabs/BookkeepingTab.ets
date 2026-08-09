@@ -1,7 +1,6 @@
 import { GlassTokens } from '../../theme/GlassTokens';
 import { common } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
-import { promptAction } from '@kit.ArkUI';
 import curves from '@ohos.curves';
 import { motion } from '@kit.MultimodalAwarenessKit';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -74,17 +73,19 @@ export struct BookkeepingTab {
   aboutToDisappear(): void {
     if (this.subscribed) {
       this.subscribed = false;
-      if (this.motionSubscribed === 'operating') {
-        try {
-          motion.off('operatingHandChanged', this.motionOperatingCb);
-        } catch (e) {
-          // 忽略
-        }
-      } else if (this.motionSubscribed === 'holding') {
-        try {
-          motion.off('holdingHandChanged', this.motionHoldingCb);
-        } catch (e) {
-          // 忽略
+      if (canIUse('SystemCapability.MultimodalAwareness.Motion')) {
+        if (this.motionSubscribed === 'operating') {
+          try {
+            motion.off('operatingHandChanged', this.motionOperatingCb);
+          } catch (e) {
+            // 忽略
+          }
+        } else if (this.motionSubscribed === 'holding') {
+          try {
+            motion.off('holdingHandChanged', this.motionHoldingCb);
+          } catch (e) {
+            // 忽略
+          }
         }
       }
       this.motionSubscribed = '';
@@ -287,60 +288,62 @@ export struct BookkeepingTab {
     }
     let anySuccess: boolean = false;
     // ① 一次性查询：独立 try/catch，失败不牵连订阅；LEFT 时同步校正初始侧
-    try {
-      const st = motion.getRecentOperatingHandStatus();
-      if (st === motion.OperatingHandStatus.LEFT_HAND_OPERATED) {
-        this.currentSide = 'left';
-        this.lastSide = 'left';
-      }
-    } catch (err) {
-      const e = err as BusinessError;
-      console.error('motion getRecent failed:', e.code, e.message);
-    }
-    // ② 主订阅 holdingHandChanged（@since20，握持手语义，设备实测可用）
-    try {
-      this.motionHoldingCb = (s: motion.HoldingHandStatus): void => {
-        if (s === motion.HoldingHandStatus.LEFT_HAND_HELD) {
-          console.info('motion event -> LEFT_HAND_HELD');
-          this.moveToSide('left');
-          this.resetHideTimer();
-        } else if (s === motion.HoldingHandStatus.RIGHT_HAND_HELD) {
-          console.info('motion event -> RIGHT_HAND_HELD');
-          this.moveToSide('right');
-          this.resetHideTimer();
-        } else {
-          console.info('motion event ->', s);
-        }
-      };
-      motion.on('holdingHandChanged', this.motionHoldingCb);
-      this.motionSubscribed = 'holding';
-      anySuccess = true;
-    } catch (err) {
-      const e = err as BusinessError;
-      console.error('motion on holdingHandChanged failed:', e.code, e.message);
-    }
-    // ③ 备订阅 operatingHandChanged（@since15，ACTIVITY_MOTION 或 DETECT_GESTURE）：主订阅失败才尝试
-    if (!anySuccess) {
+    if (canIUse('SystemCapability.MultimodalAwareness.Motion')) {
       try {
-        this.motionOperatingCb = (s: motion.OperatingHandStatus): void => {
-          if (s === motion.OperatingHandStatus.LEFT_HAND_OPERATED) {
-            console.info('motion event -> LEFT_HAND_OPERATED');
+        const st = motion.getRecentOperatingHandStatus();
+        if (st === motion.OperatingHandStatus.LEFT_HAND_OPERATED) {
+          this.currentSide = 'left';
+          this.lastSide = 'left';
+        }
+      } catch (err) {
+        const e = err as BusinessError;
+        console.error('motion getRecent failed:', e.code, e.message);
+      }
+      // ② 主订阅 holdingHandChanged（@since20，握持手语义，设备实测可用）
+      try {
+        this.motionHoldingCb = (s: motion.HoldingHandStatus): void => {
+          if (s === motion.HoldingHandStatus.LEFT_HAND_HELD) {
+            console.info('motion event -> LEFT_HAND_HELD');
             this.moveToSide('left');
             this.resetHideTimer();
-          } else if (s === motion.OperatingHandStatus.RIGHT_HAND_OPERATED) {
-            console.info('motion event -> RIGHT_HAND_OPERATED');
+          } else if (s === motion.HoldingHandStatus.RIGHT_HAND_HELD) {
+            console.info('motion event -> RIGHT_HAND_HELD');
             this.moveToSide('right');
             this.resetHideTimer();
           } else {
             console.info('motion event ->', s);
           }
         };
-        motion.on('operatingHandChanged', this.motionOperatingCb);
-        this.motionSubscribed = 'operating';
+        motion.on('holdingHandChanged', this.motionHoldingCb);
+        this.motionSubscribed = 'holding';
         anySuccess = true;
       } catch (err) {
         const e = err as BusinessError;
-        console.error('motion on operatingHandChanged failed:', e.code, e.message);
+        console.error('motion on holdingHandChanged failed:', e.code, e.message);
+      }
+      // ③ 备订阅 operatingHandChanged（@since15，ACTIVITY_MOTION 或 DETECT_GESTURE）：主订阅失败才尝试
+      if (!anySuccess) {
+        try {
+          this.motionOperatingCb = (s: motion.OperatingHandStatus): void => {
+            if (s === motion.OperatingHandStatus.LEFT_HAND_OPERATED) {
+              console.info('motion event -> LEFT_HAND_OPERATED');
+              this.moveToSide('left');
+              this.resetHideTimer();
+            } else if (s === motion.OperatingHandStatus.RIGHT_HAND_OPERATED) {
+              console.info('motion event -> RIGHT_HAND_OPERATED');
+              this.moveToSide('right');
+              this.resetHideTimer();
+            } else {
+              console.info('motion event ->', s);
+            }
+          };
+          motion.on('operatingHandChanged', this.motionOperatingCb);
+          this.motionSubscribed = 'operating';
+          anySuccess = true;
+        } catch (err) {
+          const e = err as BusinessError;
+          console.error('motion on operatingHandChanged failed:', e.code, e.message);
+        }
       }
     }
     if (anySuccess) {
@@ -514,21 +517,29 @@ export struct BookkeepingTab {
     if (this.hidden) {
       return;
     }
-    this.getUIContext().getRouter().pushUrl({
-      url: 'pages/ManualEntryPage'
-    });
+    try {
+      this.getUIContext().getRouter().pushUrl({
+        url: 'pages/ManualEntryPage'
+      });
+    } catch (err) {
+      console.error('onAddRecord pushUrl failed:', JSON.stringify(err));
+    }
   }
 
   private onImportPdf(): void {
     if (this.hidden) {
       return;
     }
-    this.getUIContext().getRouter().pushUrl({
-      url: 'pages/PDFConvertPage',
-      params: {
-        mode: 'pdfToCredit'
-      }
-    });
+    try {
+      this.getUIContext().getRouter().pushUrl({
+        url: 'pages/PDFConvertPage',
+        params: {
+          mode: 'pdfToCredit'
+        }
+      });
+    } catch (err) {
+      console.error('onImportPdf pushUrl failed:', JSON.stringify(err));
+    }
   }
 
   private async onImportImage(): Promise<void> {
@@ -546,7 +557,7 @@ export struct BookkeepingTab {
       }
       const text = await ocrImagesToText(paths);
       if (text.trim().length === 0) {
-        promptAction.showToast({ message: '未识别到文字' });
+        this.getUIContext().getPromptAction().showToast({ message: '未识别到文字' });
         return;
       }
       this.getUIContext().getRouter().pushUrl({
@@ -559,7 +570,11 @@ export struct BookkeepingTab {
       });
     } catch (err) {
       console.error('onImportImage failed', JSON.stringify(err));
-      promptAction.showToast({ message: '图片识别失败' });
+      try {
+        this.getUIContext().getPromptAction().showToast({ message: '图片识别失败' });
+      } catch (toastErr) {
+        console.error('showToast failed:', JSON.stringify(toastErr));
+      }
     }
   }
 

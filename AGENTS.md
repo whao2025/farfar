@@ -6,6 +6,7 @@
 ## 技术栈与关键配置
 - 语言/框架：ArkTS + ArkUI（声明式 UI），`@Entry`/`@Component`+`@struct` 结构体，`@Builder`/`@BuilderParam` 封装局部 UI。
 - 构建：hvigor，`build-profile.json5` 里 `targetSdkVersion`/`compatibleSdkVersion` 均为 `6.1.1(24)`，`products.default.signingConfig` 为单一字段，需手动在 `debug`/`release` 间切换（release 链：freepdf.p12 / freepdf_release.cer / freepdf_releaseRelease.p7b；debug 链：freepdf_debug.p12 别名 debugkey）。`strictMode.caseSensitiveCheck = true`。
+  - ⚠️ **CLI 构建必须设置 `DEVECO_SDK_HOME`**（指向 **SDK 根** `C:\Program Files\Huawei\DevEco Studio\sdk`，**不能**指向 `...\sdk\default`——hvigor 6.24.x 的 `HosLocalComponentLoader` 依赖根 `default\sdk-pkg.json`，location=default 豁免 + `_parsingPlatforms` 拼出 `default\openharmony\*` 真实组件路径；指向 default 会报 `00303168 SDK component missing`）。`local.properties` 的 `sdk.dir`（OpenHarmony 用）与 `hwsdk.dir`（会被 `Property` 构造内部 `delete`，无效）都不影响该 env。**命令统一用 `.\scripts\build.ps1`**（内建 env+assembleHap，`-Mode release -Clean` 可选）；直接跑裸 `hvigorw` 时先 `$env:DEVECO_SDK_HOME="C:\Program Files\Huawei\DevEco Studio\sdk"`。IDE 构建走自身 SDK 管理不受影响。详情见 `PUBLISH_GUIDE.md` "构建 Release 包" 段。
 - 已装依赖：`@ohos/lottie@2.0.14`。⚠️ **仅装机未使用** —— Splash 实际是 Canvas+Animator 手绘字母动画（见下），不要把 lottie 写成 Splash 实现。
 - 系统能力：PDF 用 `@kit.PDFKit`（PdfView、pdfService、pdfViewManager），文件 `@kit.CoreFileKit`（fileIo/picker），图片 `@kit.ImageKit`，相册 `@kit.MediaLibraryKit`（photoAccessHelper），数据库 `@kit.ArkData`（relationalStore / preferences），UI `@kit.ArkUI`（window/display/router），动作 `@kit.AbilityKit`（common），隐私 `@kit.AppGalleryKit`（privacyManager）。
 
@@ -116,6 +117,11 @@
 - 最近文件增强已完成：折叠卡（默认 4 项 + 展开全部）、星标视图独立置顶（`starPinTime`，与全局置顶解耦）、EditTab 星标筛选修复（setFilter 写回 AppStorage）。
 - 官方 DeepSeek 缓存优化：见下方「DeepSeek 前缀缓存 · 命中率诊断与戒律」。
 
+## 外部 API 调用限制（强制）
+- **NVIDIA API**：严格限制 **≤ 40 rpm**（请求/分钟），硬上限，**不允许突发**。
+- 违规视为严重违规。如未来接入 NVIDIA API，**必须**在代码层面实现限流（推荐 token bucket / 滑动窗口），并集中封装便于审计。
+- 当前项目**暂未使用** NVIDIA API，此条款为预防性约束。
+
 ## 会话/缓存约定（本会话）
 - 本会话专注 freepdf 开发，使用 DeepSeek 前缀缓存提升效率；任何文件改动遵循此处规范。
 - 变更前先 `git diff`（提交时），提交信息用 Conventional Commits：`type(scope): description`（feat/fix/refactor/docs/chore）。不 push --force。
@@ -156,6 +162,11 @@
   - 删除：`ConvertTab` 空按钮(:116-119)；`components/AutoRecordConfirm.ets`（零引用）。更正 lottie 口径（dependencies 均空、未声明）。
 - **阶段 A+（并入 A）**：OCR 图像预处理增强（纯本地无模型）：放大 2–3 倍 + 灰度/对比度 + 中值滤波/二值化/去倾斜 + 裁剪有效区 + 多 settings 重试取并集。
 - **阶段 B（之后）**：本地 OCR 大模型——PaddleOCR 中文(PP-OCR,Apache)→ONNX→MindSpore Lite 独立 converter_lite.exe 转 `.ms`（det+cls+rec，INT8 目标 ≤5–8MB）；不依赖 MindSpore Python（本机 Py3.14 不兼容）；RTX 5060 8GB/盘 167GB 够；风险=ONNX→.ms 算子支持与真机性能，接受「先切片不一定一次到位」；不走 HMS 云端 OCR。
-- **阶段 C（最后）**：记账 ML 分类双保险第 2 层——无现成账单分类模型，须自微调：albert-tiny-chinese(HF,~4M 参,Apache)→transformers→ONNX→converter_lite 转 .ms+INT8，产物 `model_int8.ms+vocab.txt+labels.json`；数据=存量记账+照片 OCR 文本，800–1500 条，工程内 `DatasetExportUtil`(recordDb→沙盒 JSON)+本机 `export_dataset.py`；接入 `utils/ml/BillClassifier.ets`(rawfile→filesDir+MindSporeLite CPU+手写 tokenizer) 注入 enhance，默认关、规则兜底，启用时同步改隐私/官申。
+- **阶段 C（最后）**：记账 ML 分类双保险第 2 层——无现成账单分类模型，须自微调：albert-tiny-chinese(HF,~4M 参,Apache)→transformers→ONNX→converter_lite 转 `.ms`，产物 `ml/albert_finetuned.ms+vocab.txt+labels.json`（rawfile）；数据=存量记账+照片 OCR 文本，800–1500 条，工程内 `DatasetExportUtil`(recordDb→沙盒 JSON)+本机 `export_dataset.py`；接入 `utils/ml/BillClassifier.ets` 注入 enhance。
+- **阶段 C 已落地（2026-08-09 完成）**：
+  - 微调：`models/albert_finetuned`（真实 24 条 + 合成 3619 条，10 类，val acc 97.19%）→ ONNX `models/onnx/albert_simple.onnx`(onnxsim 221 节点)。
+  - ⚠️ **MSL 关键坑**：onnx 导出 ALBERT 会带 `Cast(int32→bool)`（注意力掩码链），MSL CPU kernel 报 `cast_fp32.cc:169 Unsupported datatype from 34 to 30`；`Replace Cast with Equal(1)` **无效**（MSL Equal 内部仍 cast）；**正解=b'**：`attention_mask` 图输入直接改 BOOL(elem_type=9)+ 删 Cast 节点，And/Where 直吃 bool，ETS 侧 mask 用 `Uint8Array`(1字节布尔)。产物 `models/albert_bool.ms`(fp16 7.76MB)。benchmark 已验证 9 句 Mean bias<1%（fp16 噪声），ORT 9/9 标签一致。
+  - rawfile：`entry/src/main/resources/rawfile/ml/{albert_finetuned.ms, vocab.txt(21128行), labels.json(驼峰 invLabelMap)}`。⚠️ labels 键名 **必须驼峰 `invLabelMap`**（`data/labels.json` 是下划线 `inv_label_map`，不能用）。UNK id=100、CLS=101、SEP=102、PAD=0。
+  - 接线：`ProfileTab`(我的→智能分类 Toggle) → `mlOptions`(prefs `freepdf_ml_prefs`/`ml_classification_enabled`) → 开启时 `getBillClassifier().init(ctx)` + `AutoCategorizer.setEnhance(RuleCategorizer.mlEnhance)`（conf≥0.6 才覆盖规则，否则规则兜底）。启动 `loadMlState` 自动恢复接线。隐私政策已声明端侧模型。
 - 交付顺序：A+A+ 一批编译真机验证 → B → C。
 - 本地环境事实：本机 Py3.14.5(`py -3`)、无 torch/mindspore/transformers、GPU RTX 5060 Laptop 8GB(驱动 610.62)、CPU Ryzen 9 8945HX、C 盘剩 167GB。MindSpore 不支持 Py3.14 → 微调用 PyTorch，转换用独立 converter_lite。

@@ -52,10 +52,18 @@ async function ensureDir(context: common.Context): Promise<void> {
   }
 }
 
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    return await fileIo.access(path);
+  } catch (e) {
+    return false;
+  }
+}
+
 async function uniquePath(dir: string, name: string): Promise<string> {
   let candidate = dir + '/' + name;
   let i = 1;
-  while (await fileIo.access(candidate)) {
+  while (await pathExists(candidate)) {
     const dot = name.lastIndexOf('.');
     const stem = dot > 0 ? name.slice(0, dot) : name;
     const ext = dot > 0 ? name.slice(dot) : '';
@@ -66,24 +74,32 @@ async function uniquePath(dir: string, name: string): Promise<string> {
 }
 
 async function copyFileTo(srcUri: string, destPath: string): Promise<void> {
-  let srcFd: number = 0;
-  let dstFd: number = 0;
   try {
     const src = await fileIo.open(srcUri, fileIo.OpenMode.READ_ONLY);
-    srcFd = src.fd;
-    const st = await fileIo.stat(srcUri);
-    const buf = new ArrayBuffer(st.size);
-    await fileIo.read(srcFd, buf);
-    const dst = await fileIo.open(destPath, fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
-    dstFd = dst.fd;
-    await fileIo.write(dstFd, buf);
-  } finally {
-    if (srcFd !== 0) {
-      await fileIo.close(srcFd);
+    try {
+      const st = await fileIo.stat(srcUri);
+      const buf = new ArrayBuffer(st.size);
+      await fileIo.read(src.fd, buf);
+      const dst = await fileIo.open(destPath, fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
+      try {
+        await fileIo.write(dst.fd, buf);
+      } finally {
+        try {
+          await fileIo.close(dst.fd);
+        } catch (closeErr) {
+          console.error('copyFileTo close dst failed:', JSON.stringify(closeErr));
+        }
+      }
+    } finally {
+      try {
+        await fileIo.close(src.fd);
+      } catch (closeErr) {
+        console.error('copyFileTo close src failed:', JSON.stringify(closeErr));
+      }
     }
-    if (dstFd !== 0) {
-      await fileIo.close(dstFd);
-    }
+  } catch (err) {
+    console.error('copyFileTo failed:', JSON.stringify(err));
+    throw new Error(String(err));
   }
 }
 
@@ -121,17 +137,21 @@ export async function saveRecentFiles(context: common.Context, files: Array<Impo
   await ensureDir(context);
   const store: RecentStore = { files: files };
   const text = JSON.stringify(store);
-  let fd: number = 0;
   try {
     const file = await fileIo.open(recentFilePath(context), fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
-    fd = file.fd;
-    const encoder = new util.TextEncoder();
-    const buf = encoder.encodeInto(text).buffer;
-    await fileIo.write(fd, buf);
-  } finally {
-    if (fd !== 0) {
-      await fileIo.close(fd);
+    try {
+      const encoder = new util.TextEncoder();
+      const buf = encoder.encodeInto(text).buffer;
+      await fileIo.write(file.fd, buf);
+    } finally {
+      try {
+        await fileIo.close(file.fd);
+      } catch (closeErr) {
+        console.error('saveRecentFiles close failed:', JSON.stringify(closeErr));
+      }
     }
+  } catch (err) {
+    console.error('saveRecentFiles failed:', JSON.stringify(err));
   }
 }
 

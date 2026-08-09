@@ -35,5 +35,3 @@ export class AutoCategorizer {
     return RuleCategorizer.filterValid(result.suggestions);
   }
 }
-
-export const autoCategorizer = AutoCategorizer;

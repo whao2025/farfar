@@ -9,7 +9,6 @@ import { getBillClassifier } from '../../utils/ml/BillClassifier';
 import { Suggestion } from '../../model/RecordModel';
 import { datasetExportUtil, TrainingRecord } from '../../utils/DatasetExportUtil';
 import { saveSandboxFile } from '../../utils/PickerSaveUtils';
-import { fileIo } from '@kit.CoreFileKit';
 
 @Component
 export struct ProfileTab {
@@ -32,8 +31,25 @@ export struct ProfileTab {
     try {
       await mlOptions.init(ctx);
       this.mlEnabled = mlOptions.isEnabled();
+      if (this.mlEnabled) {
+        await this.activateML(ctx);
+      }
     } catch (err) {
       console.error('loadMlState failed', JSON.stringify(err));
+    }
+  }
+
+  private async activateML(ctx: common.Context): Promise<void> {
+    try {
+      await getBillClassifier().init(ctx);
+      if (getBillClassifier().isLoaded()) {
+        AutoCategorizer.setEnhance(RuleCategorizer.mlEnhance);
+      } else {
+        AutoCategorizer.setEnhance(null);
+      }
+    } catch (err) {
+      console.error('ML classifier init failed', JSON.stringify(err));
+      AutoCategorizer.setEnhance(null);
     }
   }
 
@@ -59,17 +75,7 @@ export struct ProfileTab {
       await mlOptions.init(ctx);
       await mlOptions.setEnabled(isOn);
       if (isOn) {
-        try {
-          await getBillClassifier().init(ctx);
-          if (getBillClassifier().isLoaded()) {
-            AutoCategorizer.setEnhance(RuleCategorizer.mlEnhance);
-          } else {
-            AutoCategorizer.setEnhance(null);
-          }
-        } catch (err) {
-          console.error('ML classifier init failed', JSON.stringify(err));
-          AutoCategorizer.setEnhance(null);
-        }
+        await this.activateML(ctx);
       } else {
         AutoCategorizer.setEnhance(null);
       }
@@ -81,7 +87,11 @@ export struct ProfileTab {
   private async onExportTrainingData(): Promise<void> {
     const host = this.getUIContext().getHostContext();
     if (!host) {
-      this.getUIContext().getPromptAction().showToast({ message: '导出失败' });
+      try {
+        this.getUIContext().getPromptAction().showToast({ message: '导出失败' });
+      } catch (toastErr) {
+        console.error('showToast failed', JSON.stringify(toastErr));
+      }
       return;
     }
     if (this.exporting) {
@@ -89,7 +99,8 @@ export struct ProfileTab {
     }
     this.exporting = true;
     const ctx = host as common.Context;
-    let outPath: string = '';
+    // 固定文件名供本机 scripts/export_dataset.py 通过 hdc 从沙盒拉取训练数据，刻意不清理，勿删
+    const outPath = ctx.filesDir + '/freepdf_training_data.json';
     try {
       await datasetExportUtil.init(ctx);
       let records: TrainingRecord[] = [];
@@ -103,7 +114,6 @@ export struct ProfileTab {
         this.getUIContext().getPromptAction().showToast({ message: '暂无已确认记录' });
         return;
       }
-      outPath = ctx.filesDir + '/training_' + Date.now() + '.json';
       await datasetExportUtil.exportToJSON(outPath, records);
       const saved = await saveSandboxFile(ctx, outPath, 'freepdf_training_data.json', '.json');
       if (saved) {
@@ -113,15 +123,12 @@ export struct ProfileTab {
       }
     } catch (err) {
       console.error('export training data failed', JSON.stringify(err));
-      this.getUIContext().getPromptAction().showToast({ message: '导出失败' });
-    } finally {
-      if (outPath) {
-        try {
-          await fileIo.unlink(outPath);
-        } catch (err) {
-          console.error('cleanup temp export failed', JSON.stringify(err));
-        }
+      try {
+        this.getUIContext().getPromptAction().showToast({ message: '导出失败' });
+      } catch (toastErr) {
+        console.error('showToast failed', JSON.stringify(toastErr));
       }
+    } finally {
       this.exporting = false;
     }
   }

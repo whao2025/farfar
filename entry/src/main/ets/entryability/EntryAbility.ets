@@ -59,9 +59,11 @@ export default class EntryAbility extends UIAbility {
           AppStorage.setOrCreate('breakpoint', Breakpoint.calcFromPx(size.width, density));
         });
         try {
-          display.on('foldStatusChange', (status: display.FoldStatus) => {
-            AppStorage.setOrCreate('foldStatus', status);
-          });
+          if (canIUse('SystemCapability.Window.SessionManager')) {
+            display.on('foldStatusChange', (status: display.FoldStatus) => {
+              AppStorage.setOrCreate('foldStatus', status);
+            });
+          }
         } catch (e) {
           // 不支持折叠屏的设备忽略
         }

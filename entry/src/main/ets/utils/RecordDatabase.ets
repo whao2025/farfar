@@ -25,10 +25,22 @@ export class RecordDatabase {
       name: DB_NAME,
       securityLevel: relationalStore.SecurityLevel.S2
     };
-    this.db = await relationalStore.getRdbStore(context, config);
+    try {
+      this.db = await relationalStore.getRdbStore(context, config);
+    } catch (err) {
+      console.error('getRdbStore failed:', JSON.stringify(err));
+      this.db = null;
+      throw new Error(String(err));
+    }
 
-    await this.createTable();
-    await this.createIndexes();
+    try {
+      await this.createTable();
+      await this.createIndexes();
+    } catch (err) {
+      console.error('RecordDatabase init failed:', JSON.stringify(err));
+      this.db = null;
+      throw new Error(String(err));
+    }
   }
 
   private async createTable(): Promise<void> {
@@ -49,8 +61,12 @@ export class RecordDatabase {
         status INTEGER DEFAULT 0,
         createdAt INTEGER NOT NULL
       );
-    `;
-    await this.db.executeSql(sql);
+`;
+    try {
+      await this.db.executeSql(sql);
+    } catch (err) {
+      throw new Error(String(err));
+    }
   }
 
   private async createIndexes(): Promise<void> {
@@ -65,7 +81,11 @@ export class RecordDatabase {
     ];
 
     for (const sql of indexes) {
-      await this.db.executeSql(sql);
+      try {
+        await this.db.executeSql(sql);
+      } catch (err) {
+        throw new Error(String(err));
+      }
     }
   }
 
@@ -99,16 +119,23 @@ export class RecordDatabase {
   async batchInsert(records: BookkeepingRecord[]): Promise<number[]> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const tx = await this.db.createTransaction();
+    let tx: relationalStore.Transaction | null = null;
     const ids: number[] = [];
     try {
+      tx = await this.db.createTransaction();
       for (const record of records) {
         const id = await this.insert(record);
         ids.push(id);
       }
       await tx.commit();
     } catch (err) {
-      await tx.rollback();
+      if (tx) {
+        try {
+          await tx.rollback();
+        } catch (rollbackErr) {
+          console.error('Rollback failed:', JSON.stringify(rollbackErr));
+        }
+      }
       throw new Error(String(err));
     }
     return ids;
@@ -164,22 +191,29 @@ export class RecordDatabase {
       ORDER BY dateStr ASC
     `;
     const args: Array<relationalStore.ValueType> = [startDate, endDate, RecordStatus.DELETED as number];
-    const resultSet = await this.db.querySql(sql, args);
-
     const stats: DailyStat[] = [];
     try {
-      while (resultSet.goToNextRow()) {
-        const dateStrIdx = resultSet.getColumnIndex('dateStr');
-        const expIdx = resultSet.getColumnIndex('totalExpense');
-        const incIdx = resultSet.getColumnIndex('totalIncome');
-        stats.push({
-          dateStr: resultSet.getString(dateStrIdx),
-          expense: resultSet.getDouble(expIdx),
-          income: resultSet.getDouble(incIdx)
-        });
+      const resultSet = await this.db.querySql(sql, args);
+      try {
+        while (resultSet.goToNextRow()) {
+          const dateStrIdx = resultSet.getColumnIndex('dateStr');
+          const expIdx = resultSet.getColumnIndex('totalExpense');
+          const incIdx = resultSet.getColumnIndex('totalIncome');
+          stats.push({
+            dateStr: resultSet.getString(dateStrIdx),
+            expense: resultSet.getDouble(expIdx),
+            income: resultSet.getDouble(incIdx)
+          });
+        }
+      } finally {
+        try {
+          resultSet.close();
+        } catch (closeErr) {
+          console.error('resultSet close failed:', JSON.stringify(closeErr));
+        }
       }
-    } finally {
-      resultSet.close();
+    } catch (err) {
+      console.error('getWeeklyStats failed:', JSON.stringify(err));
     }
     return stats;
   }
@@ -195,18 +229,26 @@ export class RecordDatabase {
     `;
     const prefix = month.substring(0, 7) + '%';
     const args: Array<relationalStore.ValueType> = [prefix, RecordStatus.DELETED as number];
-    const resultSet = await this.db.querySql(sql, args);
 
     const result: MonthTotal = { expense: 0, income: 0 };
     try {
-      if (resultSet.goToNextRow()) {
-        const expIdx = resultSet.getColumnIndex('totalExpense');
-        const incIdx = resultSet.getColumnIndex('totalIncome');
-        result.expense = resultSet.getDouble(expIdx);
-        result.income = resultSet.getDouble(incIdx);
+      const resultSet = await this.db.querySql(sql, args);
+      try {
+        if (resultSet.goToNextRow()) {
+          const expIdx = resultSet.getColumnIndex('totalExpense');
+          const incIdx = resultSet.getColumnIndex('totalIncome');
+          result.expense = resultSet.getDouble(expIdx);
+          result.income = resultSet.getDouble(incIdx);
+        }
+      } finally {
+        try {
+          resultSet.close();
+        } catch (closeErr) {
+          console.error('resultSet close failed:', JSON.stringify(closeErr));
+        }
       }
-    } finally {
-      resultSet.close();
+    } catch (err) {
+      console.error('getMonthlyTotals failed:', JSON.stringify(err));
     }
     return result;
   }
@@ -244,7 +286,12 @@ export class RecordDatabase {
     const bucket: relationalStore.ValuesBucket = { status: status as number };
     const predicates = new relationalStore.RdbPredicates(TABLE_NAME);
     predicates.equalTo('id', id);
-    return await this.db.update(bucket, predicates);
+    try {
+      return await this.db.update(bucket, predicates);
+    } catch (err) {
+      console.error('UpdateStatus failed:', JSON.stringify(err));
+      throw new Error(String(err));
+    }
   }
 
   async delete(id: number, hardDelete: boolean = false): Promise<void> {
@@ -252,7 +299,12 @@ export class RecordDatabase {
 
     if (hardDelete) {
       const sql = `DELETE FROM ${TABLE_NAME} WHERE id = ?`;
-      await this.db.executeSql(sql, [id]);
+      try {
+        await this.db.executeSql(sql, [id]);
+      } catch (err) {
+        console.error('Delete failed:', JSON.stringify(err));
+        throw new Error(String(err));
+      }
     } else {
       await this.updateStatus(id, RecordStatus.DELETED);
     }
@@ -262,12 +314,21 @@ export class RecordDatabase {
     if (!this.db) throw new Error('Database not initialized');
 
     const sql = `DELETE FROM ${TABLE_NAME}`;
-    await this.db.executeSql(sql);
+    try {
+      await this.db.executeSql(sql);
+    } catch (err) {
+      console.error('ClearAll failed:', JSON.stringify(err));
+      throw new Error(String(err));
+    }
   }
 
   async close(): Promise<void> {
     if (this.db) {
-      await this.db.close();
+      try {
+        await this.db.close();
+      } catch (err) {
+        console.error('RecordDatabase close failed:', JSON.stringify(err));
+      }
       this.db = null;
     }
   }
@@ -275,41 +336,49 @@ export class RecordDatabase {
   private async queryRecords(sql: string, args: Array<relationalStore.ValueType>): Promise<BookkeepingRecord[]> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const resultSet = await this.db.querySql(sql, args);
     const records: BookkeepingRecord[] = [];
     try {
-      while (resultSet.goToNextRow()) {
-        const idIdx = resultSet.getColumnIndex('id');
-        const amountIdx = resultSet.getColumnIndex('amount');
-        const typeIdx = resultSet.getColumnIndex('type');
-        const categoryIdx = resultSet.getColumnIndex('category');
-        const noteIdx = resultSet.getColumnIndex('note');
-        const merchantIdx = resultSet.getColumnIndex('merchant');
-        const timestampIdx = resultSet.getColumnIndex('timestamp');
-        const dateStrIdx = resultSet.getColumnIndex('dateStr');
-        const confidenceIdx = resultSet.getColumnIndex('confidence');
-        const sourceIdx = resultSet.getColumnIndex('source');
-        const statusIdx = resultSet.getColumnIndex('status');
-        const createdAtIdx = resultSet.getColumnIndex('createdAt');
+      const resultSet = await this.db.querySql(sql, args);
+      try {
+        while (resultSet.goToNextRow()) {
+          const idIdx = resultSet.getColumnIndex('id');
+          const amountIdx = resultSet.getColumnIndex('amount');
+          const typeIdx = resultSet.getColumnIndex('type');
+          const categoryIdx = resultSet.getColumnIndex('category');
+          const noteIdx = resultSet.getColumnIndex('note');
+          const merchantIdx = resultSet.getColumnIndex('merchant');
+          const timestampIdx = resultSet.getColumnIndex('timestamp');
+          const dateStrIdx = resultSet.getColumnIndex('dateStr');
+          const confidenceIdx = resultSet.getColumnIndex('confidence');
+          const sourceIdx = resultSet.getColumnIndex('source');
+          const statusIdx = resultSet.getColumnIndex('status');
+          const createdAtIdx = resultSet.getColumnIndex('createdAt');
 
-        const merchantValue = resultSet.getString(merchantIdx);
-        records.push({
-          id: resultSet.getLong(idIdx),
-          amount: resultSet.getDouble(amountIdx),
-          type: resultSet.getString(typeIdx) as RecordType,
-          category: resultSet.getString(categoryIdx),
-          note: resultSet.getString(noteIdx),
-          merchant: merchantValue.trim().length > 0 ? merchantValue : null,
-          timestamp: resultSet.getLong(timestampIdx),
-          dateStr: resultSet.getString(dateStrIdx),
-          confidence: resultSet.getDouble(confidenceIdx),
-          source: resultSet.getString(sourceIdx) as RecordSource,
-          status: resultSet.getLong(statusIdx) as RecordStatus,
-          createdAt: resultSet.getLong(createdAtIdx)
-        });
+          const merchantValue = resultSet.getString(merchantIdx);
+          records.push({
+            id: resultSet.getLong(idIdx),
+            amount: resultSet.getDouble(amountIdx),
+            type: resultSet.getString(typeIdx) as RecordType,
+            category: resultSet.getString(categoryIdx),
+            note: resultSet.getString(noteIdx),
+            merchant: merchantValue.trim().length > 0 ? merchantValue : null,
+            timestamp: resultSet.getLong(timestampIdx),
+            dateStr: resultSet.getString(dateStrIdx),
+            confidence: resultSet.getDouble(confidenceIdx),
+            source: resultSet.getString(sourceIdx) as RecordSource,
+            status: resultSet.getLong(statusIdx) as RecordStatus,
+            createdAt: resultSet.getLong(createdAtIdx)
+          });
+        }
+      } finally {
+        try {
+          resultSet.close();
+        } catch (closeErr) {
+          console.error('resultSet close failed:', JSON.stringify(closeErr));
+        }
       }
-    } finally {
-      resultSet.close();
+    } catch (err) {
+      console.error('queryRecords failed:', JSON.stringify(err));
     }
     return records;
   }

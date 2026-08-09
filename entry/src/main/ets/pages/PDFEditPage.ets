@@ -149,7 +149,11 @@ struct PDFEditPage {
   }
 
   private showToast(msg: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: msg });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: msg });
+    } catch (err) {
+      console.error('showToast failed:', JSON.stringify(err));
+    }
   }
 
   private dialogInput: string = '';
@@ -929,7 +933,11 @@ struct PDFEditPage {
   }
 
   private onPickBlock(index: number): void {
-    this.getUIContext().getPromptAction().closeCustomDialog(this.blockListId);
+    try {
+      this.getUIContext().getPromptAction().closeCustomDialog(this.blockListId);
+    } catch (err) {
+      console.error('closeCustomDialog failed:', JSON.stringify(err));
+    }
     const block = this.textBlocks.find((b) => b.index === index);
     if (!block) {
       return;

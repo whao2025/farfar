@@ -31,7 +31,11 @@ struct PDFConvertPage {
   }
 
   private showToast(msg: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: msg });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: msg });
+    } catch (err) {
+      console.error('showToast failed:', JSON.stringify(err));
+    }
   }
 
   private getTitle(): string {

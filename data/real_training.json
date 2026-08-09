@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "exportDate": "2026-08-08T02:55:40.846Z",
+  "recordCount": 24,
+  "records": [
+    {"id": 21, "text": "¥8.00", "category": "其他", "type": "expense", "amount": -8, "merchant": "", "source": "img-ocr", "confidence": 0.3},
+    {"id": 17, "text": "¥10.00", "category": "其他", "type": "expense", "amount": -10, "merchant": "", "source": "img-ocr", "confidence": 0.3},
+    {"id": 15, "text": "24.90", "category": "其他", "type": "expense", "amount": -24.9, "merchant": "", "source": "img-ocr", "confidence": 0.2},
+    {"id": 19, "text": "¥5.00", "category": "其他", "type": "expense", "amount": -5, "merchant": "", "source": "img-ocr", "confidence": 0.3},
+    {"id": 14, "text": "¥26.80", "category": "其他", "type": "expense", "amount": -26.8, "merchant": "", "source": "img-ocr", "confidence": 0.35},
+    {"id": 16, "text": "7/16下午11:18", "category": "其他", "type": "expense", "amount": -16, "merchant": "", "source": "img-ocr", "confidence": 0.15},
+    {"id": 18, "text": "¥8.00", "category": "其他", "type": "expense", "amount": -8, "merchant": "", "source": "img-ocr", "confidence": 0.3},
+    {"id": 20, "text": "2.00", "category": "其他", "type": "expense", "amount": -2, "merchant": "", "source": "img-ocr", "confidence": 0.15},
+    {"id": 13, "text": "7.22 cNY", "category": "其他", "type": "expense", "amount": -7.22, "merchant": "", "source": "img-ocr", "confidence": 0.2},
+    {"id": 12, "text": "¥4.00", "category": "其他", "type": "expense", "amount": -4, "merchant": "", "source": "img-ocr", "confidence": 0.3},
+    {"id": 6, "text": "退回支付卡(工商银行6986)", "category": "其他", "type": "expense", "amount": -6986, "merchant": "", "source": "img-ocr", "confidence": 0.15},
+    {"id": 7, "text": "¥8.00", "category": "其他", "type": "expense", "amount": -8, "merchant": "", "source": "img-ocr", "confidence": 0.3},
+    {"id": 8, "text": "¥4.00", "category": "其他", "type": "expense", "amount": -4, "merchant": "", "source": "img-ocr", "confidence": 0.3},
+    {"id": 9, "text": "退回支付（工商银行6986）", "category": "其他", "type": "expense", "amount": -6986, "merchant": "", "source": "img-ocr", "confidence": 0.15},
+    {"id": 10, "text": "¥8.00", "category": "其他", "type": "expense", "amount": -8, "merchant": "", "source": "img-ocr", "confidence": 0.3},
+    {"id": 11, "text": "¥4.00", "category": "其他", "type": "expense", "amount": -4, "merchant": "", "source": "img-ocr", "confidence": 0.3},
+    {"id": 3, "text": "退回支付（工商银行6986）", "category": "其他", "type": "expense", "amount": -6986, "merchant": "", "source": "img-ocr", "confidence": 0.15},
+    {"id": 4, "text": "¥8.00", "category": "其他", "type": "expense", "amount": -8, "merchant": "", "source": "img-ocr", "confidence": 0.3},
+    {"id": 5, "text": "¥4.00", "category": "其他", "type": "expense", "amount": -4, "merchant": "", "source": "img-ocr", "confidence": 0.3},
+    {"id": 22, "text": "", "category": "餐饮", "type": "expense", "amount": -15, "merchant": "美团", "source": "pdf-text", "confidence": 1},
+    {"id": 23, "text": "", "category": "交通", "type": "expense", "amount": -10, "merchant": "公交车", "source": "pdf-text", "confidence": 1},
+    {"id": 24, "text": "", "category": "工资", "type": "income", "amount": 1500, "merchant": "生活费", "source": "pdf-text", "confidence": 1},
+    {"id": 1, "text": "吃饭。", "category": "工资", "type": "income", "amount": 1000, "merchant": "", "source": "pdf-text", "confidence": 1},
+    {"id": 2, "text": "", "category": "交通", "type": "expense", "amount": -18, "merchant": "", "source": "pdf-text", "confidence": 1}
+  ]
+}

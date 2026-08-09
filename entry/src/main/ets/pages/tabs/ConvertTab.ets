@@ -111,6 +111,10 @@ export struct ConvertTab {
   }
 
   private openConvert(mode: string): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/PDFConvertPage', params: { mode: mode } });
+    try {
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/PDFConvertPage', params: { mode: mode } });
+    } catch (err) {
+      console.error('openConvert pushUrl failed:', JSON.stringify(err));
+    }
   }
 }

@@ -17,7 +17,13 @@ export async function pickImagesToSandbox(context: common.Context, max: number =
   const options = new photoAccessHelper.PhotoSelectOptions();
   options.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE;
   options.maxSelectNumber = max;
-  const result = await picker.select(options);
+  let result: photoAccessHelper.PhotoSelectResult;
+  try {
+    result = await picker.select(options);
+  } catch (err) {
+    console.warn('pick images canceled or failed', JSON.stringify(err));
+    return [];
+  }
   if (!result.photoUris || result.photoUris.length === 0) {
     return [];
   }
@@ -41,10 +47,18 @@ export async function pickImagesToSandbox(context: common.Context, max: number =
       console.error('copy img failed', JSON.stringify(err));
     } finally {
       if (srcFd !== 0) {
-        await fileIo.close(srcFd);
+        try {
+          await fileIo.close(srcFd);
+        } catch (err) {
+          console.warn('close src fd failed', JSON.stringify(err));
+        }
       }
       if (dstFd !== 0) {
-        await fileIo.close(dstFd);
+        try {
+          await fileIo.close(dstFd);
+        } catch (err) {
+          console.warn('close dst fd failed', JSON.stringify(err));
+        }
       }
     }
   }
@@ -107,6 +121,11 @@ async function recognizeImageWithPreprocess(filePath: string): Promise<string> {
 
 async function upscalePixelMap(pm: image.PixelMap): Promise<image.PixelMap | null> {
   try {
+    const info = await pm.getImageInfo();
+    const dim = Math.max(info.size.width, info.size.height);
+    if (dim * UPSCALE > 4096) {
+      return null;
+    }
     return await pm.createScaledPixelMap(UPSCALE, UPSCALE);
   } catch (err) {
     console.error('upscale failed', JSON.stringify(err));
@@ -115,8 +134,11 @@ async function upscalePixelMap(pm: image.PixelMap): Promise<image.PixelMap | nul
 }
 
 async function recognizeOnce(pm: image.PixelMap): Promise<string> {
+  const config: textRecognition.TextRecognitionConfiguration = {
+    isDirectionDetectionSupported: true
+  };
   try {
-    const res = await textRecognition.recognizeText({ pixelMap: pm });
+    const res = await textRecognition.recognizeText({ pixelMap: pm }, config);
     return res.value ?? '';
   } catch (err) {
     console.error('recognizeText failed', JSON.stringify(err));

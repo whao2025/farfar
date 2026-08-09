@@ -20,15 +20,24 @@ export class MLOptions {
   async init(context: common.Context): Promise<void> {
     if (this.prefs) return;
 
-    this.prefs = await preferences.getPreferences(context, { name: MLOptions.PREFS_NAME });
-    this.enabled = this.prefs.getSync(MLOptions.KEY_ENABLED, false) as boolean;
+    try {
+      this.prefs = await preferences.getPreferences(context, { name: MLOptions.PREFS_NAME });
+      this.enabled = this.prefs.getSync(MLOptions.KEY_ENABLED, false) as boolean;
+    } catch (err) {
+      console.error('MLOptions init failed:', JSON.stringify(err));
+      this.prefs = null;
+    }
   }
 
   async setEnabled(enabled: boolean): Promise<void> {
     this.enabled = enabled;
     if (this.prefs) {
-      this.prefs.putSync(MLOptions.KEY_ENABLED, enabled);
-      await this.prefs.flush();
+      try {
+        this.prefs.putSync(MLOptions.KEY_ENABLED, enabled);
+        await this.prefs.flush();
+      } catch (err) {
+        console.error('MLOptions setEnabled failed:', JSON.stringify(err));
+      }
     }
   }
 

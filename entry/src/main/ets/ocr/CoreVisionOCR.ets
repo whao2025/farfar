@@ -15,7 +15,6 @@ const UPSCALE = 2;
 const CACHE_DIR = 'ocr_cache';
 
 export class CoreVisionOCR implements OCRService {
-  private inited: boolean = false;
   private context: common.Context | null = null;
 
   configure(context?: common.Context): void {
@@ -47,11 +46,6 @@ export class CoreVisionOCR implements OCRService {
         return { pages: [] };
       }
       const total = doc.getPageCount();
-      this.inited = await this.initSafe();
-      if (!this.inited) {
-        console.error('CoreVisionOCR init failed');
-        return { pages: [] };
-      }
       const pages: OCRPage[] = [];
       for (let i = 0; i < total; i++) {
         if (options?.startPage !== undefined && i < options.startPage) {
@@ -73,7 +67,6 @@ export class CoreVisionOCR implements OCRService {
       console.error('CoreVisionOCR.recognize failed', JSON.stringify(e));
       return { pages: [] };
     } finally {
-      await this.releaseSafe();
       if (doc) {
         doc.releaseDocument();
       }
@@ -97,6 +90,9 @@ export class CoreVisionOCR implements OCRService {
   }
 
   private async recognizePage(page: pdfService.PdfPage): Promise<TextBlock[]> {
+    const config: textRecognition.TextRecognitionConfiguration = {
+      isDirectionDetectionSupported: true
+    };
     for (let attempt = 0; attempt < MAX_RETRY; attempt++) {
       const pixelMap = page.getPagePixelMap();
       if (!pixelMap) {
@@ -107,9 +103,11 @@ export class CoreVisionOCR implements OCRService {
         const merged: TextBlock[] = [];
         if (up) {
           try {
-            const upRes = await textRecognition.recognizeText({ pixelMap: up });
+            const upRes = await textRecognition.recognizeText({ pixelMap: up }, config);
             const upBlocks = this.parseResult(upRes, page, UPSCALE);
-            merged.push(...upBlocks);
+            for (let i = 0; i < upBlocks.length; i++) {
+              merged.push(upBlocks[i]);
+            }
           } catch (err) {
             console.error('recognizeText upscaled failed attempt=' + attempt, JSON.stringify(err));
           } finally {
@@ -117,9 +115,11 @@ export class CoreVisionOCR implements OCRService {
           }
         }
         try {
-          const res = await textRecognition.recognizeText({ pixelMap: pixelMap });
+          const res = await textRecognition.recognizeText({ pixelMap: pixelMap }, config);
           const blocks = this.parseResult(res, page, 1);
-          merged.push(...blocks);
+          for (let i = 0; i < blocks.length; i++) {
+            merged.push(blocks[i]);
+          }
         } catch (err) {
           console.error('recognizeText failed attempt=' + attempt, JSON.stringify(err));
         }
@@ -136,6 +136,11 @@ export class CoreVisionOCR implements OCRService {
 
   private async upscalePixelMap(pm: image.PixelMap): Promise<image.PixelMap | null> {
     try {
+      const info = await pm.getImageInfo();
+      const dim = Math.max(info.size.width, info.size.height);
+      if (dim * UPSCALE > 4096) {
+        return null;
+      }
       return await pm.createScaledPixelMap(UPSCALE, UPSCALE);
     } catch (err) {
       console.error('upscale failed', JSON.stringify(err));
@@ -280,23 +285,6 @@ export class CoreVisionOCR implements OCRService {
       }
     } catch (err) {
       console.error('writeCache failed', JSON.stringify(err));
-    }
-  }
-
-  private async initSafe(): Promise<boolean> {
-    try {
-      return await textRecognition.init();
-    } catch (err) {
-      console.error('CoreVisionOCR init failed', JSON.stringify(err));
-      return false;
-    }
-  }
-
-  private async releaseSafe(): Promise<void> {
-    try {
-      await textRecognition.release();
-    } catch (err) {
-      console.error('CoreVisionOCR release failed', JSON.stringify(err));
     }
   }
 }

@@ -93,7 +93,11 @@ export struct RecentFilesPanel {
   }
 
   private openFile(item: ImportFileItem): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/PDFViewer', params: { filePath: item.path } });
+    try {
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/PDFViewer', params: { filePath: item.path } });
+    } catch (err) {
+      console.error('openFile pushUrl failed:', JSON.stringify(err));
+    }
   }
 
   private async onMoveToTop(item: ImportFileItem): Promise<void> {
@@ -113,7 +117,11 @@ export struct RecentFilesPanel {
   }
 
   private onEditItem(item: ImportFileItem): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/PDFEditPage', params: { filePath: item.path } });
+    try {
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/PDFEditPage', params: { filePath: item.path } });
+    } catch (err) {
+      console.error('onEditItem pushUrl failed:', JSON.stringify(err));
+    }
   }
 
   private async onDeleteItem(item: ImportFileItem): Promise<void> {
@@ -203,7 +211,11 @@ export struct RecentFilesPanel {
     this.recentFiles = updated.slice();
     this.bumpRefresh();
     this.exitSelectMode();
-    uiContext.getPromptAction().showToast({ message: `已置顶 ${names.length} 个文件` });
+    try {
+      uiContext.getPromptAction().showToast({ message: `已置顶 ${names.length} 个文件` });
+    } catch (err) {
+      console.error('onBatchPin showToast failed:', JSON.stringify(err));
+    }
   }
 
   private async onBatchDelete(): Promise<void> {

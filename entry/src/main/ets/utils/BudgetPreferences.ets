@@ -19,7 +19,12 @@ export class BudgetPreferences {
 
   async init(context: common.Context): Promise<void> {
     if (this.prefs) return;
-    this.prefs = await preferences.getPreferences(context, PREFS_NAME);
+    try {
+      this.prefs = await preferences.getPreferences(context, PREFS_NAME);
+    } catch (err) {
+      console.error('BudgetPreferences init failed:', JSON.stringify(err));
+      this.prefs = null;
+    }
   }
 
   async getMonthlyBudget(): Promise<number> {
@@ -34,8 +39,13 @@ export class BudgetPreferences {
 
   async setMonthlyBudget(budget: number): Promise<void> {
     if (!this.prefs) throw new Error('Preferences not initialized');
-    await this.prefs.put('monthly_budget', budget);
-    await this.prefs.flush();
+    try {
+      await this.prefs.put('monthly_budget', budget);
+      await this.prefs.flush();
+    } catch (err) {
+      console.error('setMonthlyBudget failed:', JSON.stringify(err));
+      throw new Error(String(err));
+    }
   }
 
   async getBudgetConfig(): Promise<BudgetConfig> {
@@ -69,8 +79,12 @@ export class BudgetPreferences {
 
   async setLaunched(): Promise<void> {
     if (!this.prefs) return;
-    await this.prefs.put('launched_before', true);
-    await this.prefs.flush();
+    try {
+      await this.prefs.put('launched_before', true);
+      await this.prefs.flush();
+    } catch (err) {
+      console.error('setLaunched failed:', JSON.stringify(err));
+    }
   }
 }
 

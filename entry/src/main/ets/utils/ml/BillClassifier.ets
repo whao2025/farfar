@@ -2,21 +2,22 @@ import { mindSporeLite } from '@kit.MindSporeLiteKit';
 import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
 
-const MODEL_FILE_NAME = 'albert_finetuned.ms';
-const VOCAB_FILE_NAME = 'vocab.txt';
-const LABELS_FILE_NAME = 'labels.json';
+const MODEL_FILE_NAME = 'ml/albert_finetuned.ms';
+const VOCAB_FILE_NAME = 'ml/vocab.txt';
+const LABELS_FILE_NAME = 'ml/labels.json';
 const MAX_INPUT_LENGTH = 128;
 const DEFAULT_PAD_ID = 0;
-const DEFAULT_UNK_ID = 1;
-
-export interface ClassificationResult {
-  category: string;
-  confidence: number;
-}
+const DEFAULT_UNK_ID = 100;
 
 interface LabelsConfig {
   labelMap?: Record<string, string>;
   invLabelMap?: Record<string, string>;
+  inv_label_map?: Record<string, string>;
+}
+
+export interface ClassificationResult {
+  category: string;
+  confidence: number;
 }
 
 export class BillClassifier {
@@ -32,16 +33,22 @@ export class BillClassifier {
       return;
     }
     try {
+      if (!canIUse('SystemCapability.AI.MindSporeLite')) {
+        console.error('MindSporeLite syscap unsupported, BillClassifier disabled');
+        return;
+      }
       const modelBytes = await context.resourceManager.getRawFileContent(MODEL_FILE_NAME);
       const modelBuffer = new ArrayBuffer(modelBytes.byteLength);
       new Uint8Array(modelBuffer).set(new Uint8Array(modelBytes.buffer));
 
-      this.model = await mindSporeLite.loadModelFromBuffer(modelBuffer, {
-        target: ['cpu'],
-        cpu: {
-          threadNum: 1
-        }
-      });
+      if (canIUse('SystemCapability.AI.MindSporeLite')) {
+        this.model = await mindSporeLite.loadModelFromBuffer(modelBuffer, {
+          target: ['cpu'],
+          cpu: {
+            threadNum: 1
+          }
+        });
+      }
       if (!this.model) {
         this.model = null;
         return;
@@ -52,6 +59,7 @@ export class BillClassifier {
 
       this.loaded = true;
       console.log('BillClassifier initialized successfully');
+      this.warmup();
     } catch (err) {
       console.error('BillClassifier init failed:', JSON.stringify(err));
       this.model = null;
@@ -59,41 +67,63 @@ export class BillClassifier {
     }
   }
 
+  private async warmup(): Promise<void> {
+    try {
+      const res = await this.classify('美团外卖 消费');
+      if (res) {
+        console.log('BillClassifier warmup ok, category=' + res.category + ', conf=' + res.confidence.toFixed(3));
+      } else {
+        console.error('BillClassifier warmup returned null');
+      }
+    } catch (err) {
+      console.error('BillClassifier warmup failed:', JSON.stringify(err));
+    }
+  }
+
   private async loadVocab(context: common.Context): Promise<void> {
-    const vocabBytes = await context.resourceManager.getRawFileContent(VOCAB_FILE_NAME);
-    const decoder = new util.TextDecoder();
-    const content = decoder.decodeToString(new Uint8Array(vocabBytes.buffer));
-    const lines = content.split('\n');
-    this.tokenToId = new Map<string, number>();
-    for (let i = 0; i < lines.length; i++) {
-      const token = lines[i].trim();
-      if (token) {
-        if (this.tokenToId.has(token)) {
-          continue;
-        }
-        this.tokenToId.set(token, i);
-        if (token === '[PAD]') {
-          this.padId = i;
-        } else if (token === '[UNK]') {
-          this.unkId = i;
+    try {
+      const vocabBytes = await context.resourceManager.getRawFileContent(VOCAB_FILE_NAME);
+      const decoder = new util.TextDecoder();
+      const content = decoder.decodeToString(new Uint8Array(vocabBytes.buffer));
+      const lines = content.split('\n');
+      this.tokenToId = new Map<string, number>();
+      for (let i = 0; i < lines.length; i++) {
+        const token = lines[i].trim();
+        if (token) {
+          if (this.tokenToId.has(token)) {
+            continue;
+          }
+          this.tokenToId.set(token, i);
+          if (token === '[PAD]') {
+            this.padId = i;
+          } else if (token === '[UNK]') {
+            this.unkId = i;
+          }
         }
       }
+    } catch (err) {
+      console.error('loadVocab failed:', JSON.stringify(err));
     }
   }
 
   private async loadLabels(context: common.Context): Promise<void> {
-    const bytes = await context.resourceManager.getRawFileContent(LABELS_FILE_NAME);
-    const decoder = new util.TextDecoder();
-    const content = decoder.decodeToString(new Uint8Array(bytes.buffer));
-    const labelsConfig = JSON.parse(content) as LabelsConfig;
-    const inv: Record<string, string> = labelsConfig.invLabelMap ? labelsConfig.invLabelMap : {};
-    const names: string[] = [];
-    const keys = Object.keys(inv);
-    keys.sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
-    for (let i = 0; i < keys.length; i++) {
-      names.push(inv[keys[i]]);
+    try {
+      const bytes = await context.resourceManager.getRawFileContent(LABELS_FILE_NAME);
+      const decoder = new util.TextDecoder();
+      const content = decoder.decodeToString(new Uint8Array(bytes.buffer));
+      const labelsConfig = JSON.parse(content) as LabelsConfig;
+      const inv: Record<string, string> = labelsConfig.invLabelMap ? labelsConfig.invLabelMap :
+        (labelsConfig.inv_label_map ? labelsConfig.inv_label_map : {});
+      const names: string[] = [];
+      const keys = Object.keys(inv);
+      keys.sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+      for (let i = 0; i < keys.length; i++) {
+        names.push(inv[keys[i]]);
+      }
+      this.categoryNames = names;
+    } catch (err) {
+      console.error('loadLabels failed:', JSON.stringify(err));
     }
-    this.categoryNames = names;
   }
 
   private tokenizeToIds(text: string): Int32Array {
@@ -139,63 +169,78 @@ export class BillClassifier {
       console.error('BillClassifier not loaded');
       return null;
     }
-    try {
-      const inputIds = this.tokenizeToIds(text);
-      const attentionMask = new Int32Array(MAX_INPUT_LENGTH);
-      for (let i = 0; i < MAX_INPUT_LENGTH; i++) {
-        attentionMask[i] = inputIds[i] !== this.padId ? 1 : 0;
-      }
+    if (canIUse('SystemCapability.AI.MindSporeLite')) {
+      return await this.classifyWithModel(text);
+    }
+    console.error('MindSporeLite syscap unsupported');
+    return null;
+  }
 
-      const inputs: mindSporeLite.MSTensor[] = this.model.getInputs();
-      if (!inputs || inputs.length < 2) {
-        console.error('model inputs invalid');
-        return null;
-      }
-
-      const idBytes = new ArrayBuffer(inputIds.byteLength);
-      new Int32Array(idBytes).set(inputIds);
-      inputs[0].setData(idBytes);
-
-      const maskBytes = new ArrayBuffer(attentionMask.byteLength);
-      new Int32Array(maskBytes).set(attentionMask);
-      inputs[1].setData(maskBytes);
-
-      const outputs: mindSporeLite.MSTensor[] = await this.model.predict(inputs);
-      if (!outputs || outputs.length === 0) {
-        console.error('predict returned empty outputs');
-        return null;
-      }
-
-      const logitsBuf: ArrayBuffer = outputs[0].getData();
-      const logits = new Float32Array(logitsBuf);
-      if (logits.length === 0) {
-        return null;
-      }
-
-      let maxIdx = 0;
-      for (let i = 1; i < logits.length; i++) {
-        if (logits[i] > logits[maxIdx]) {
-          maxIdx = i;
-        }
-      }
-
-      const expValues = new Float32Array(logits.length);
-      let sumExp = 0;
-      for (let i = 0; i < logits.length; i++) {
-        expValues[i] = Math.exp(logits[i]);
-        sumExp += expValues[i];
-      }
-      const confidence = sumExp > 0 ? expValues[maxIdx] / sumExp : 0;
-
-      const category = maxIdx < this.categoryNames.length ? this.categoryNames[maxIdx] : '其他';
-      return {
-        category: category,
-        confidence: confidence
-      };
-    } catch (err) {
-      console.error('BillClassifier classify failed:', JSON.stringify(err));
+  private async classifyWithModel(text: string): Promise<ClassificationResult | null> {
+    if (!this.model) {
       return null;
     }
+    if (canIUse('SystemCapability.AI.MindSporeLite')) {
+      try {
+        const inputIds = this.tokenizeToIds(text);
+        const attentionMask = new Uint8Array(MAX_INPUT_LENGTH);
+        for (let i = 0; i < MAX_INPUT_LENGTH; i++) {
+          attentionMask[i] = inputIds[i] !== this.padId ? 1 : 0;
+        }
+
+        const inputs: mindSporeLite.MSTensor[] = this.model.getInputs();
+        if (!inputs || inputs.length < 2) {
+          console.error('model inputs invalid');
+          return null;
+        }
+
+        const idBytes = new ArrayBuffer(inputIds.byteLength);
+        new Int32Array(idBytes).set(inputIds);
+        inputs[0].setData(idBytes);
+
+        const maskBytes = new ArrayBuffer(attentionMask.byteLength);
+        new Uint8Array(maskBytes).set(attentionMask);
+        inputs[1].setData(maskBytes);
+
+        const outputs: mindSporeLite.MSTensor[] = await this.model.predict(inputs);
+        if (!outputs || outputs.length === 0) {
+          console.error('predict returned empty outputs');
+          return null;
+        }
+
+        const logitsBuf: ArrayBuffer = outputs[0].getData();
+        const logits = new Float32Array(logitsBuf);
+        if (logits.length === 0) {
+          return null;
+        }
+
+        let maxIdx = 0;
+        for (let i = 1; i < logits.length; i++) {
+          if (logits[i] > logits[maxIdx]) {
+            maxIdx = i;
+          }
+        }
+
+        const expValues = new Float32Array(logits.length);
+        let sumExp = 0;
+        for (let i = 0; i < logits.length; i++) {
+          expValues[i] = Math.exp(logits[i]);
+          sumExp += expValues[i];
+        }
+        const confidence = sumExp > 0 ? expValues[maxIdx] / sumExp : 0;
+
+        const category = maxIdx < this.categoryNames.length ? this.categoryNames[maxIdx] : '其他';
+        return {
+          category: category,
+          confidence: confidence
+        };
+      } catch (err) {
+        console.error('BillClassifier classify failed:', JSON.stringify(err));
+        return null;
+      }
+    }
+    console.error('MindSporeLite syscap unsupported');
+    return null;
   }
 
   isLoaded(): boolean {

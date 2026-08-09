@@ -54,22 +54,17 @@ export async function ocrPdfAsync(pdfPath: string): Promise<string> {
     const pdf: pdfService.PdfDocument = doc;
     return await runOcrSession(async () => {
       let sb: string = '';
-      let inited: boolean = false;
-      try {
-        inited = await initOcrSafe();
-        for (let i = 0; i < count; i++) {
-          const page = pdf.getPage(i);
-          const text = await recognizePageHiRes(page, inited);
-          if (text.trim().length > 0) {
-            sb += text;
-            if (i < count - 1) {
-              sb += '\n';
-            }
+      const config: textRecognition.TextRecognitionConfiguration = {
+        isDirectionDetectionSupported: true
+      };
+      for (let i = 0; i < count; i++) {
+        const page = pdf.getPage(i);
+        const text = await recognizePageHiRes(page, config);
+        if (text.trim().length > 0) {
+          sb += text;
+          if (i < count - 1) {
+            sb += '\n';
           }
-        }
-      } finally {
-        if (inited) {
-          await releaseOcrSafe();
         }
       }
       return sb.trim();
@@ -88,7 +83,7 @@ export async function ocrPdfAsync(pdfPath: string): Promise<string> {
 /**
  * 高清渲染页面后识别。优先彩色高清，空白时退灰度重试，两路结果并集去重。
  */
-async function recognizePageHiRes(page: pdfService.PdfPage, inited: boolean): Promise<string> {
+async function recognizePageHiRes(page: pdfService.PdfPage, config: textRecognition.TextRecognitionConfiguration): Promise<string> {
   const w = page.getWidth();
   const h = page.getHeight();
   if (w <= 0 || h <= 0) {
@@ -98,23 +93,18 @@ async function recognizePageHiRes(page: pdfService.PdfPage, inited: boolean): Pr
   const color = renderPage(page, w, h, s, false);
   if (color) {
     try {
-      if (inited) {
-        const res = await textRecognition.recognizeText({ pixelMap: color });
-        const value = res.value ?? '';
-        if (value.trim().length > 0) {
-          return value;
-        }
-        const gray = renderPage(page, w, h, s, true);
-        if (gray) {
-          try {
-            const res2 = await textRecognition.recognizeText({ pixelMap: gray });
-            return mergeUniqueLines(value, res2.value ?? '');
-          } catch (err) {
-            console.error('ocr gray recognizeText failed', JSON.stringify(err));
-            return '';
-          } finally {
-            gray.release();
-          }
+      const res = await textRecognition.recognizeText({ pixelMap: color }, config);
+      const value = res.value ?? '';
+      if (value.trim().length > 0) {
+        return value;
+      }
+      const gray = renderPage(page, w, h, s, true);
+      if (gray) {
+        try {
+          const res2 = await textRecognition.recognizeText({ pixelMap: gray }, config);
+          return mergeUniqueLines(value, res2.value ?? '');
+        } finally {
+          gray.release();
         }
       }
       return '';
@@ -156,19 +146,3 @@ function renderPage(
   }
 }
 
-async function initOcrSafe(): Promise<boolean> {
-  try {
-    return await textRecognition.init();
-  } catch (err) {
-    console.error('ocr init failed', JSON.stringify(err));
-    return false;
-  }
-}
-
-async function releaseOcrSafe(): Promise<void> {
-  try {
-    await textRecognition.release();
-  } catch (err) {
-    console.error('ocr release failed', JSON.stringify(err));
-  }
-}
