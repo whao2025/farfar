@@ -1,4 +1,5 @@
 import { pdfService, pdfViewManager, PdfView } from '@kit.PDFKit';
+import { display } from '@kit.ArkUI';
 import { fileIo } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -72,6 +73,8 @@ struct PDFEditPage {
   @State overlayH: number = 0;
   @State pdfPageW: number = 595;
   @State pdfPageH: number = 842;
+  @State pageAreaW: number = 0;
+  @State pageAreaH: number = 0;
   @State selectedOpIndex: number = -1;
   @State opsCount: number = 0;
   @State objTick: number = 0;
@@ -249,6 +252,7 @@ struct PDFEditPage {
           this.controller.registerScrollListener((param: pdfViewManager.ScrollParam) => {
             this.scrollParam = param;
           });
+          this.refreshPageSize();
         }
       } catch (err) {
         console.error('edit loadDocument failed', JSON.stringify(err));
@@ -267,8 +271,20 @@ struct PDFEditPage {
     });
     this.controller.registerPageChangedListener((pageIndex: number) => {
       this.currentPage = pageIndex;
+      this.refreshPageSize();
       this.onPageChangedForRewrite();
     });
+  }
+
+  private async refreshPageSize(): Promise<void> {
+    if (!this.filePath) {
+      return;
+    }
+    const size = await getPageSizeAsync(this.filePath, this.currentPage);
+    if (size.ok && size.width > 0 && size.height > 0) {
+      this.pdfPageW = size.width;
+      this.pdfPageH = size.height;
+    }
   }
 
   private onPageChangedForRewrite(): void {
@@ -354,7 +370,7 @@ struct PDFEditPage {
 
   private hlPxY(): number {
     const hpt = this.pageHeightPt();
-    return (hpt - Math.max(this.hlStartY, this.hlCurY)) * this.scalePx();
+    return this.pageTopVp() + (hpt - Math.max(this.hlStartY, this.hlCurY)) * this.scalePx();
   }
 
   private hlPxW(): number {
@@ -406,15 +422,17 @@ struct PDFEditPage {
   private rewriteBlockBox(block: TextBlockInfo, idx: number) {
     Stack() {
       Text(this.showRewriteText(block, idx))
-        .fontSize(11)
+        .fontSize(9)
         .fontColor(this.dark ? '#9EC6FF' : '#2A6FDB')
         .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Clip })
     }
     .position({ x: this.rewriteBlockPxX(block), y: this.rewriteBlockPxY(block) })
     .width(this.rewriteBlockPxW(block))
     .height(this.rewriteBlockPxH(block))
     .padding({ left: 4, right: 4 })
     .borderRadius(2)
+    .clip(true)
     .border({ width: 1, color: this.rewriteSelected === block.index ? '#4C9AFF' : 'rgba(76,154,255,0.45)', style: BorderStyle.Dashed })
     .backgroundColor(this.rewriteSelected === block.index ? 'rgba(76,154,255,0.22)' : 'rgba(76,154,255,0.06)')
   }
@@ -429,7 +447,7 @@ struct PDFEditPage {
 
   private rewriteBlockPxY(block: TextBlockInfo): number {
     const hpt = this.pageHeightPt();
-    return (hpt - block.y - block.height) * this.rewriteBlockScale();
+    return this.pageTopVp() + (hpt - block.y - block.height) * this.rewriteBlockScale();
   }
 
   private rewriteBlockPxW(block: TextBlockInfo): number {
@@ -634,18 +652,62 @@ struct PDFEditPage {
     return v;
   }
 
-  // 唯一正确：px(屏幕, 相对 PdfView 左上, 含滚动) → PDF pt(距左, 距下)
-  // 只用 ScrollParam + getPageZoom()。FIT_WIDTH 下 pdfWidth==viewWidth==W_pt*zoom。
+  private density(): number {
+    try {
+      return display.getDefaultDisplaySync().densityPixels;
+    } catch (err) {
+      return 1;
+    }
+  }
+
+  // 渲染比例（px / pt）。FIT_WIDTH 下 pdfWidth 即页面在屏幕上的像素宽。
+  private pxPerPt(): number {
+    const sp = this.scrollParam;
+    const wpt = this.pageWidthPt();
+    if (sp && sp.pdfWidth > 0 && wpt > 0) {
+      return sp.pdfWidth / wpt;
+    }
+    const d = this.density();
+    return this.overlayW > 0 && wpt > 0 ? (this.overlayW * d) / wpt : 1;
+  }
+
+  // 页面上边在 PdfView 内的偏移（vp）：页面比视口矮时在视口内垂直居中（真机实测）
+  private pageTopVp(): number {
+    const sp = this.scrollParam;
+    const d = this.density();
+    if (!sp || sp.pdfHeight <= 0 || this.pageAreaH <= 0) {
+      return 0;
+    }
+    return Math.max(0, this.pageAreaH * d - sp.pdfHeight) / 2 / d;
+  }
+
+  private pageLeftVp(): number {
+    const sp = this.scrollParam;
+    const d = this.density();
+    if (!sp || sp.pdfWidth <= 0 || this.pageAreaW <= 0) {
+      return 0;
+    }
+    return Math.max(0, this.pageAreaW * d - sp.pdfWidth) / 2 / d;
+  }
+
+  // 屏幕触摸坐标（相对 PdfView 左上，vp）→ PDF pt(距左, 距下)
   private screenToPdf(pxX: number, pxY: number, sp: pdfViewManager.ScrollParam, zoom: number): PdfCoord {
-    const W_pt = sp.pdfWidth / zoom;
-    const H_pt = sp.pdfHeight / zoom;
-    const cx = pxX + sp.offsetX * sp.viewWidth;   // 内容坐标 px
-    const cy = pxY + sp.offsetY * sp.viewHeight;
-    const fx = this.clamp01(cx / sp.pdfWidth);    // 归一化 0..1
+    const wpt = this.pageWidthPt();
+    const hpt = this.pageHeightPt();
+    const d = this.density();
+    const areaWpx = this.pageAreaW > 0 ? this.pageAreaW * d : sp.viewWidth;
+    const areaHpx = this.pageAreaH > 0 ? this.pageAreaH * d : sp.viewHeight;
+    const scrollX = Math.max(0, sp.pdfWidth - areaWpx);
+    const scrollY = Math.max(0, sp.pdfHeight - areaHpx);
+    const marginX = Math.max(0, areaWpx - sp.pdfWidth) / 2;
+    const marginY = Math.max(0, areaHpx - sp.pdfHeight) / 2;
+    const cx = pxX * d - marginX + sp.offsetX * scrollX;   // 页面内 px
+    const cy = pxY * d - marginY + sp.offsetY * scrollY;
+    const fx = this.clamp01(cx / sp.pdfWidth);
     const fy = this.clamp01(cy / sp.pdfHeight);
     const coord: PdfCoord = {
-      x: W_pt * fx,          // 距左 pt
-      y: H_pt * (1 - fy)     // 距下 pt（y 翻转）
+      x: wpt * fx,
+      y: hpt * (1 - fy)
     };
     return coord;
   }
@@ -721,7 +783,7 @@ struct PDFEditPage {
           y: y1,
           width: w,
           height: h,
-          color: this.highlightColor
+          color: 0xFF000000 | this.highlightColor
         } as EditHighlightOp);
         this.selectLastOp();
         this.statusMsg = ('已添加高亮：' + Math.round(w) + '×' + Math.round(h) + 'pt（保存后生效）') as string;
@@ -740,30 +802,17 @@ struct PDFEditPage {
   }
 
   private pageHeightPt(): number {
-    const sp = this.scrollParam;
-    if (sp && sp.pdfHeight > 0) {
-      const zoom = this.controller.getPageZoom();
-      if (zoom > 0) {
-        return sp.pdfHeight / zoom;
-      }
-    }
-    return this.pdfPageH;
+    return this.pdfPageH > 0 ? this.pdfPageH : 842;
   }
 
   private pageWidthPt(): number {
-    const sp = this.scrollParam;
-    if (sp && sp.pdfWidth > 0) {
-      const zoom = this.controller.getPageZoom();
-      if (zoom > 0) {
-        return sp.pdfWidth / zoom;
-      }
-    }
-    return this.pdfPageW;
+    return this.pdfPageW > 0 ? this.pdfPageW : 595;
   }
 
+  // overlay 布局单位（vp）与 PDF pt 的比例
   private scalePx(): number {
-    const wpt = this.pageWidthPt();
-    return wpt > 0 ? this.overlayW / wpt : 1;
+    const d = this.density();
+    return d > 0 ? this.pxPerPt() / d : 1;
   }
 
   private opRect(index: number): PdfCoord {
@@ -774,20 +823,22 @@ struct PDFEditPage {
     const s = this.scalePx();
     const hpt = this.pageHeightPt();
     const size = this.opPdfSize(index);
+    const leftVp = this.pageLeftVp();
+    const topVp = this.pageTopVp();
     if (op.op === 'addText') {
-      return { x: op.x * s, y: (hpt - op.y) * s - size.y * s };
+      return { x: leftVp + op.x * s, y: topVp + (hpt - op.y - size.y) * s };
     }
     if (op.op === 'addImage') {
-      return { x: op.x * s, y: (hpt - op.y) * s - size.y * s };
+      return { x: leftVp + op.x * s, y: topVp + (hpt - op.y - size.y) * s };
     }
     if (op.op === 'addHighlight') {
-      return { x: op.x * s, y: (hpt - op.y) * s - size.y * s };
+      return { x: leftVp + op.x * s, y: topVp + (hpt - op.y - size.y) * s };
     }
     if (op.op === 'addTextAnnot') {
-      return { x: op.x * s, y: (hpt - op.y) * s - size.y * s };
+      return { x: leftVp + op.x * s, y: topVp + (hpt - op.y - size.y) * s };
     }
     if (op.op === 'addFreeText') {
-      return { x: op.x * s, y: (hpt - op.y) * s - size.y * s };
+      return { x: leftVp + op.x * s, y: topVp + (hpt - op.y - size.y) * s };
     }
     return { x: 0, y: 0 };
   }
@@ -1035,7 +1086,7 @@ struct PDFEditPage {
             x: x,
             y: y,
             size: 16,
-            color: this.dark ? 0xF2F2F7 : 0x1A1A1F,
+            color: this.dark ? 0xFFF2F2F7 : 0xFF1A1A1F,
             text: text
           };
           this.pushOp(op);
@@ -1082,7 +1133,7 @@ struct PDFEditPage {
           y: y,
           width: this.highlightWidth,
           height: 30,
-          color: this.highlightColor
+          color: 0xFF000000 | this.highlightColor
         };
         this.pushOp(op);
         this.selectLastOp();
@@ -1100,8 +1151,8 @@ struct PDFEditPage {
             y: y,
             width: 180,
             content: content,
-            fillColor: 0xFFF3B0,
-            textColor: 0x1A1A1F,
+            fillColor: 0xFFFFF3B0,
+            textColor: 0xFF1A1A1F,
             fontSize: 14
           };
           this.pushOp(op);
@@ -1201,8 +1252,8 @@ struct PDFEditPage {
           y: block.y,
           width: Math.max(block.width, 24),
           content: value,
-          fillColor: 0xFFFFFF,
-          textColor: 0x000000,
+          fillColor: 0xFFFFFFFF,
+          textColor: 0xFF000000,
           fontSize: fs
         };
         this.pushOp(op);
@@ -1223,7 +1274,7 @@ struct PDFEditPage {
         x: pos.x,
         y: pos.y,
         size: Math.max(10, block.fontSize),
-        color: this.dark ? 0xF2F2F7 : 0x1A1A1F
+        color: this.dark ? 0xFFF2F2F7 : 0xFF1A1A1F
       };
       this.pushOp(op);
       this.statusMsg = `已添加文本到第 ${this.currentPage + 1} 页（保存后生效）`;
@@ -1262,7 +1313,7 @@ struct PDFEditPage {
   private ocrBlockPxY(block: TextBlock): number {
     const hpt = this.pageHeightPt();
     const s = this.ocrBlockScale();
-    return (hpt - block.y - block.height) * s;
+    return this.pageTopVp() + (hpt - block.y - block.height) * s;
   }
 
   private ocrBlockPxW(block: TextBlock): number {
@@ -1278,7 +1329,7 @@ struct PDFEditPage {
   }
 
   private ocrBlockCenterY(block: TextBlock): number {
-    return (this.pageHeightPt() - block.y - block.height / 2) * this.ocrBlockScale();
+    return this.pageTopVp() + (this.pageHeightPt() - block.y - block.height / 2) * this.ocrBlockScale();
   }
 
   private onAddImage(): void {
@@ -1827,6 +1878,10 @@ struct PDFEditPage {
         }
         .layoutWeight(1)
         .width('100%')
+        .onAreaChange((oldArea: Area, newArea: Area) => {
+          this.pageAreaW = Number(newArea.width);
+          this.pageAreaH = Number(newArea.height);
+        })
       } else {
         Column() {
           Text('无法解析 PDF 文件')
