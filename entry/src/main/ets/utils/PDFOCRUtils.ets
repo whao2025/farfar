@@ -116,15 +116,79 @@ export async function ocrPdfAsync(pdfPath: string): Promise<string> {
 /**
  * 高清渲染页面后识别。优先彩色高清，空白时退灰度重试，两路结果并集去重。
  */
+const NOISE_ONLY_SYMBOLS = '|_-=~^\u0060\u00b7\u2022\u25cf\u25cb\u25a0\u25a1\u25c6\u25c7\u203b\u2192\u2190\u2191\u2193\u2500\u2502\u250c\u2510\u2514\u2518';
+const MEANINGFUL_PUNCT = '.,:;%\u00a5\u00a3$/-()[]\u3001\u3002\uff0c\uff1a\uff1b\uff05\uffe5';
+
+function isNoiseLine(line: string): boolean {
+  const compact = line.replace(/\s+/g, '');
+  if (compact.length === 0) {
+    return true;
+  }
+  let meaningful = 0;
+  let symbolOnly = true;
+  for (let i = 0; i < compact.length; i++) {
+    const ch = compact.charAt(i);
+    const code = ch.charCodeAt(0);
+    const isCjk = code >= 0x4e00 && code <= 0x9fff;
+    const isAlnum = (code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a);
+    if (isCjk || isAlnum) {
+      meaningful++;
+      symbolOnly = false;
+    } else if (MEANINGFUL_PUNCT.indexOf(ch) >= 0) {
+      meaningful++;
+      symbolOnly = false;
+    }
+  }
+  // 纯噪声符号行（如 "|||", "----", "· ·"）
+  if (symbolOnly && compact.length <= 8) {
+    return true;
+  }
+  // 有意义的字符占比过低（如 "| | | 3"）且行很短的，视为噪声
+  if (compact.length <= 12 && meaningful / compact.length < 0.45) {
+    return true;
+  }
+  return false;
+}
+
 function normalizeOcrText(text: string): string {
-  let t = text.replace(/\u200B/g, '').replace(/\uFEFF/g, '');
-  // 中文之间误插的空格去掉（OCR 常见问题）
+  let t = text.replace(/\uFFFD/g, '');
+  t = t.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+  t = t.replace(/\u200B/g, '').replace(/\uFEFF/g, '');
+  // 中文/全角之间误插的空格去掉（OCR 常见问题）
   for (let i = 0; i < 3; i++) {
     t = t.replace(/([\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef])\s+([\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef])/g, '$1$2');
   }
+  // 数字之间的空格去掉（"3 8" -> "38"）
+  for (let i = 0; i < 2; i++) {
+    t = t.replace(/([0-9])\s+([0-9])/g, '$1$2');
+  }
+  // 重复噪声符号压缩（"||||||" -> "||"），但不影响正常文字
+  t = t.replace(/([^\u4e00-\u9fa5A-Za-z0-9])\1{3,}/g, '$1$1');
   t = t.replace(/[ \t]{2,}/g, ' ');
-  t = t.replace(/\n{3,}/g, '\n\n');
-  return t.trim();
+  const rawLines = t.split('\n');
+  const kept: string[] = [];
+  let prev = '';
+  for (const rawLine of rawLines) {
+    const line = rawLine.trim();
+    if (line.length === 0) {
+      if (kept.length > 0 && kept[kept.length - 1] !== '') {
+        kept.push('');
+      }
+      continue;
+    }
+    if (isNoiseLine(line)) {
+      continue;
+    }
+    if (line === prev) {
+      continue;
+    }
+    kept.push(line);
+    prev = line;
+  }
+  while (kept.length > 0 && kept[kept.length - 1] === '') {
+    kept.pop();
+  }
+  return kept.join('\n').trim();
 }
 
 async function recognizeOnce(page: pdfService.PdfPage, w: number, h: number, scale: number,
