@@ -285,11 +285,11 @@ function runEditOps(srcPath: string, outPath: string, newDoc: boolean,
       if (rwColors[j] > 0) {
         style.textColor = rwColors[j];
       }
-      if (rwRefs[j].fontInfo) {
-        style.fontInfo = rwRefs[j].fontInfo;
-      } else {
-        style.fontInfo = new pdfService.FontInfo();
-        style.fontInfo.fontName = 'HarmonyOS Sans';
+      // 不复用原 fontInfo：deleteGraphicsObject 后原字体资源可能失效，重插会不可见
+      style.fontInfo = new pdfService.FontInfo();
+      style.fontInfo.fontName = 'HarmonyOS Sans';
+      if (style.textColor === undefined || style.textColor === 0) {
+        style.textColor = 0xFF000000;
       }
       p.addTextObject(rwTexts[j], rwXs[j], rwYs[j], style);
     }
