@@ -70,6 +70,18 @@ export interface EditRewriteTextOp {
   batchId?: string;
 }
 
+export interface EditFreeTextOp {
+  op: 'addFreeText';
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  content: string;
+  fillColor: number;
+  textColor: number;
+  fontSize: number;
+}
+
 export interface TextBlockInfo {
   index: number;
   id: string;
@@ -83,7 +95,7 @@ export interface TextBlockInfo {
 }
 
 export type EditOp = EditTextOp | EditImageOp | EditHighlightOp | EditTextAnnotOp
-  | EditInsertBlankOp | EditDeletePageOp | EditMergeOp | EditRewriteTextOp;
+  | EditInsertBlankOp | EditDeletePageOp | EditMergeOp | EditRewriteTextOp | EditFreeTextOp;
 
 export interface EditResult {
   success: boolean;
@@ -103,6 +115,7 @@ function runEditOps(srcPath: string, outPath: string, newDoc: boolean,
   const OP_DELETE_PAGE = 6;
   const OP_MERGE = 7;
   const OP_REWRITE_TEXT = 8;
+  const OP_ADD_FREE_TEXT = 9;
   let doc: pdfService.PdfDocument | null = null;
   const rwPages: number[] = [];
   const rwRefs: Array<pdfService.TextObject> = [];
@@ -110,6 +123,7 @@ function runEditOps(srcPath: string, outPath: string, newDoc: boolean,
   const rwYs: number[] = [];
   const rwTexts: string[] = [];
   const rwSizes: number[] = [];
+  const rwColors: number[] = [];
   try {
     doc = new pdfService.PdfDocument();
     if (newDoc) {
@@ -232,7 +246,31 @@ function runEditOps(srcPath: string, outPath: string, newDoc: boolean,
           rwYs.push(target.y);
           rwTexts.push(opsText[i]);
           rwSizes.push(opsNum[i]);
+          // GraphicsObject.fillColor 对 TEXT 即文字颜色，用于回写时保留原色
+          rwColors.push(target.fillColor);
         }
+      } else if (kind === OP_ADD_FREE_TEXT) {
+        if (pageIndex >= doc.getPageCount()) {
+          continue;
+        }
+        const page = doc.getPage(pageIndex);
+        const info = new pdfService.FreeTextAnnotationInfo();
+        info.type = pdfService.AnnotationType.FREETEXT;
+        info.uniqueId = 'ft' + Date.now().toString() + i.toString();
+        info.content = opsText[i];
+        info.x = opsX[i];
+        info.y = opsY[i];
+        info.width = opsW[i];
+        info.fillColor = opsH[i];
+        info.opacity = 1;
+        const ftStyle: pdfService.TextStyle = new pdfService.TextStyle();
+        ftStyle.textSize = opsNum[i] > 0 ? opsNum[i] : 12;
+        ftStyle.textColor = opsCounts[i];
+        ftStyle.fontInfo = new pdfService.FontInfo();
+        ftStyle.fontInfo.fontName = 'HarmonyOS Sans';
+        info.textStyle = ftStyle;
+        info.textAlignment = pdfService.AlignmentType.LEFT;
+        page.addAnnotation(info);
       }
     }
 
@@ -244,6 +282,9 @@ function runEditOps(srcPath: string, outPath: string, newDoc: boolean,
       const p = doc.getPage(rwPages[j]);
       const style: pdfService.TextStyle = new pdfService.TextStyle();
       style.textSize = rwSizes[j];
+      if (rwColors[j] > 0) {
+        style.textColor = rwColors[j];
+      }
       if (rwRefs[j].fontInfo) {
         style.fontInfo = rwRefs[j].fontInfo;
       } else {
@@ -295,6 +336,9 @@ export async function applyEditsAsync(srcPath: string, outPath: string, ops: Edi
       kinds.push(7); pages.push(op.dstIndex); xs.push(op.dstIndex); ys.push(0); ws.push(0); hs.push(0); texts.push(op.srcPath); nums.push(op.srcStart); counts.push(op.srcCount);
     } else if (op.op === 'rewriteText') {
       kinds.push(8); pages.push(op.page); xs.push(op.index); ys.push(0); ws.push(0); hs.push(0); texts.push(op.newText); nums.push(op.newSize); counts.push(1);
+    } else if (op.op === 'addFreeText') {
+      // 复用通道：hs=fillColor、counts=textColor（runEditOps 按 kind 解释）
+      kinds.push(9); pages.push(op.page); xs.push(op.x); ys.push(op.y); ws.push(op.width); hs.push(op.fillColor); texts.push(op.content); nums.push(op.fontSize); counts.push(op.textColor);
     }
   }
   const task = new taskpool.Task(runEditOps, srcPath, outPath, newDoc, kinds, pages, xs, ys, ws, hs, texts, nums, counts);
@@ -460,22 +504,22 @@ function runListTextObjects(srcPath: string, pageIndex: number): string {
         sizes.push(size);
         const rects: Array<pdfService.PdfRect> = t.charRects;
         if (rects && rects.length > 0) {
-          // PdfRect 各字段为「距对应页面边缘的距离」（doc 语义，P0 真机核验点）：
-          // left=距左缘、right=距右缘、top=距上缘、bottom=距下缘。
-          // 包围盒 = 取各方向距离的最小值，再换算为「距左下原点」的 x/y/w/h。
+          // 官方 d.ts：PdfRect.left/right 是「矩形左/右边到 Y 轴的距离」，top/bottom 是「到 X 轴的距离」，
+          // 即 left/right = x 坐标、top/bottom = y 坐标（PDF 左下原点，y 向上）。
+          // 包围盒 = (minLeft, minBottom) ~ (maxRight, maxTop)。
           let minL = Number.MAX_VALUE;
-          let minR = Number.MAX_VALUE;
-          let minT = Number.MAX_VALUE;
+          let maxR = -Number.MAX_VALUE;
+          let maxT = -Number.MAX_VALUE;
           let minB = Number.MAX_VALUE;
           for (const r of rects) {
             if (r.left < minL) {
               minL = r.left;
             }
-            if (r.right < minR) {
-              minR = r.right;
+            if (r.right > maxR) {
+              maxR = r.right;
             }
-            if (r.top < minT) {
-              minT = r.top;
+            if (r.top > maxT) {
+              maxT = r.top;
             }
             if (r.bottom < minB) {
               minB = r.bottom;
@@ -483,8 +527,8 @@ function runListTextObjects(srcPath: string, pageIndex: number): string {
           }
           xs.push(minL);
           ys.push(minB);
-          ws.push(pageW - minR - minL);
-          hs.push(pageH - minT - minB);
+          ws.push(maxR - minL > 0 ? maxR - minL : 0.1);
+          hs.push(maxT - minB > 0 ? maxT - minB : size);
         } else {
           // 无 charRects 兜底：按字号估宽（每字符 ~0.72 字号宽），y 为基线距底
           const len = t.text.length > 0 ? t.text.length : 1;

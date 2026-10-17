@@ -8,7 +8,7 @@ import { GlassTokens } from '../theme/GlassTokens';
 import { FontMatcher } from '../layout/FontMatcher';
 import { GlassToolbar } from '../components/GlassToolbar';
 import { GlassButton } from '../components/GlassButton';
-import { applyEditsAsync, EditOp, EditTextOp, EditImageOp, EditHighlightOp, EditTextAnnotOp, EditInsertBlankOp, EditDeletePageOp, EditMergeOp, EditRewriteTextOp, TextBlockInfo, TextObjectResult, listTextObjectsAsync, getPageSizeAsync } from '../utils/PDFEditUtils';
+import { applyEditsAsync, EditOp, EditTextOp, EditImageOp, EditHighlightOp, EditTextAnnotOp, EditInsertBlankOp, EditDeletePageOp, EditMergeOp, EditRewriteTextOp, EditFreeTextOp, TextBlockInfo, TextObjectResult, listTextObjectsAsync, getPageSizeAsync } from '../utils/PDFEditUtils';
 import { saveSandboxFile } from '../utils/PickerSaveUtils';
 import { pickAndCopyPDF } from '../utils/PDFImportUtils';
 import { addEditedFile } from '../utils/ImportLibrary';
@@ -79,6 +79,12 @@ struct PDFEditPage {
   @State ocrBusy: boolean = false;
   @State ocrProgress: number = 0;
   @State ocrBlocks: TextBlock[] = [];
+  @State ocrForRewrite: boolean = false;
+  @State hlDragging: boolean = false;
+  @State hlStartX: number = 0;
+  @State hlStartY: number = 0;
+  @State hlCurX: number = 0;
+  @State hlCurY: number = 0;
   private rewriteSelected: number = -1;
   private ops: EditOp[] = [];
   private ocrService: OCRService = createOCRService();
@@ -340,6 +346,33 @@ struct PDFEditPage {
       .backgroundColor(this.dark ? GlassTokens.BG_DARK : GlassTokens.BG_LIGHT)
 .borderRadius(20)
     .border({ width: 1, color: this.dark ? GlassTokens.BORDER_DARK : GlassTokens.BORDER_LIGHT })
+  }
+
+  private hlPxX(): number {
+    return Math.min(this.hlStartX, this.hlCurX) * this.scalePx();
+  }
+
+  private hlPxY(): number {
+    const hpt = this.pageHeightPt();
+    return (hpt - Math.max(this.hlStartY, this.hlCurY)) * this.scalePx();
+  }
+
+  private hlPxW(): number {
+    return Math.abs(this.hlCurX - this.hlStartX) * this.scalePx();
+  }
+
+  private hlPxH(): number {
+    return Math.abs(this.hlCurY - this.hlStartY) * this.scalePx();
+  }
+
+  @Builder
+  hlDragPreview() {
+    Stack()
+      .position({ x: this.hlPxX(), y: this.hlPxY() })
+      .width(this.hlPxW())
+      .height(this.hlPxH())
+      .backgroundColor('rgba(76,154,255,0.18)')
+      .border({ width: 1, color: '#4C9AFF' })
   }
 
   @Builder
@@ -617,34 +650,93 @@ struct PDFEditPage {
     return coord;
   }
 
+  private touchPointOf(event: TouchEvent): TouchObject | null {
+    if (event.changedTouches && event.changedTouches.length > 0) {
+      return event.changedTouches[0];
+    }
+    if (event.touches && event.touches.length > 0) {
+      return event.touches[0];
+    }
+    return null;
+  }
+
   private onOverlayTouch(event: TouchEvent): void {
-    if (event.type === TouchType.Down && event.touches.length > 0) {
-      const t = event.touches[0];
+    const sp = this.scrollParam;
+    if (!sp || sp.pdfWidth <= 0 || sp.pdfHeight <= 0) {
+      return;
+    }
+    const t = this.touchPointOf(event);
+    if (!t) {
+      return;
+    }
+    if (event.type === TouchType.Down) {
+      // 高亮工具：顶部 100vp 是颜色/宽度选择区，避免点控制区误放高亮
+      if (this.activedTool === 2 && t.y < 100) {
+        return;
+      }
       this.touchStartX = t.x;
       this.touchStartY = t.y;
       this.touchStartT = Date.now();
-    } else if (event.type === TouchType.Up && this.touchStartX >= 0 && event.touches.length > 0) {
-      const t = event.touches[0];
-      const dx = t.x - this.touchStartX;
-      const dy = t.y - this.touchStartY;
-      const dt = Date.now() - this.touchStartT;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      this.touchStartX = -1;
-      this.touchStartY = -1;
-      if (dist > 10 || dt > 500) {
-        return;
+      if (this.activedTool === 2) {
+        const pos = this.screenToPdf(t.x, t.y, sp, this.controller.getPageZoom());
+        this.hlStartX = pos.x;
+        this.hlStartY = pos.y;
+        this.hlCurX = pos.x;
+        this.hlCurY = pos.y;
+        this.hlDragging = true;
       }
-      const sp = this.scrollParam;
-      if (!sp || sp.pdfWidth <= 0 || sp.pdfHeight <= 0) {
-        return;
-      }
-      if (this.activedTool === 4) {
-        this.onRewriteBlockTap(t.x, t.y);
-        return;
-      }
-      const pos = this.screenToPdf(t.x, t.y, sp, this.controller.getPageZoom());
-      this.placeAt(pos.x, pos.y);
+      return;
     }
+    if (event.type === TouchType.Move) {
+      if (this.activedTool === 2 && this.hlDragging) {
+        const pos = this.screenToPdf(t.x, t.y, sp, this.controller.getPageZoom());
+        this.hlCurX = pos.x;
+        this.hlCurY = pos.y;
+      }
+      return;
+    }
+    if (event.type !== TouchType.Up) {
+      return;
+    }
+    if (this.touchStartX < 0) {
+      return;
+    }
+    const dx = t.x - this.touchStartX;
+    const dy = t.y - this.touchStartY;
+    const dt = Date.now() - this.touchStartT;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    this.touchStartX = -1;
+    this.touchStartY = -1;
+    if (this.activedTool === 2 && this.hlDragging) {
+      this.hlDragging = false;
+      const x1 = Math.min(this.hlStartX, this.hlCurX);
+      const y1 = Math.min(this.hlStartY, this.hlCurY);
+      const w = Math.abs(this.hlCurX - this.hlStartX);
+      const h = Math.abs(this.hlCurY - this.hlStartY);
+      if (w > 3 && h > 3) {
+        this.pushOp({
+          op: 'addHighlight',
+          page: this.currentPage,
+          x: x1,
+          y: y1,
+          width: w,
+          height: h,
+          color: this.highlightColor
+        } as EditHighlightOp);
+        this.selectLastOp();
+        this.statusMsg = ('已添加高亮：' + Math.round(w) + '×' + Math.round(h) + 'pt（保存后生效）') as string;
+        return;
+      }
+    }
+    if (dist > 10 || dt > 500) {
+      return;
+    }
+    if (this.activedTool === 4) {
+      this.onRewriteBlockTap(t.x, t.y);
+      return;
+    }
+    const pos = this.screenToPdf(t.x, t.y, sp, this.controller.getPageZoom());
+    this.placeAt(pos.x, pos.y);
   }
 
   private pageHeightPt(): number {
@@ -694,6 +786,9 @@ struct PDFEditPage {
     if (op.op === 'addTextAnnot') {
       return { x: op.x * s, y: (hpt - op.y) * s - size.y * s };
     }
+    if (op.op === 'addFreeText') {
+      return { x: op.x * s, y: (hpt - op.y) * s - size.y * s };
+    }
     return { x: 0, y: 0 };
   }
 
@@ -717,7 +812,13 @@ struct PDFEditPage {
       return { x: (op as EditImageOp).width, y: (op as EditImageOp).height };
     }
     if (op.op === 'addHighlight') {
-      return { x: 200, y: 30 };
+      return { x: (op as EditHighlightOp).width, y: (op as EditHighlightOp).height };
+    }
+    if (op.op === 'addFreeText') {
+      const fc = (op as EditFreeTextOp).content;
+      const flen = fc.length > 0 ? fc.length : 1;
+      const ffs = (op as EditFreeTextOp).fontSize > 0 ? (op as EditFreeTextOp).fontSize : 12;
+      return { x: (op as EditFreeTextOp).width, y: Math.max(ffs * 1.6, 20) };
     }
     if (op.op === 'addTextAnnot') {
       const c = (op as EditTextAnnotOp).content;
@@ -759,6 +860,9 @@ struct PDFEditPage {
       op.x = op.x + dx;
       op.y = op.y - dy;
     } else if (op.op === 'addTextAnnot') {
+      op.x = op.x + dx;
+      op.y = op.y - dy;
+    } else if (op.op === 'addFreeText') {
       op.x = op.x + dx;
       op.y = op.y - dy;
     } else {
@@ -910,7 +1014,7 @@ struct PDFEditPage {
     const res: number[] = [];
     for (let i = 0; i < this.ops.length; i++) {
       const op = this.ops[i];
-      if (op.op === 'addText' || op.op === 'addImage' || op.op === 'addHighlight' || op.op === 'addTextAnnot') {
+      if (op.op === 'addText' || op.op === 'addImage' || op.op === 'addHighlight' || op.op === 'addTextAnnot' || op.op === 'addFreeText') {
         res.push(i);
       }
     }
@@ -985,17 +1089,20 @@ struct PDFEditPage {
         break;
       }
       case 3: {
-        this.promptTextInput('输入标注内容', '', (content: string) => {
+        this.promptTextInput('输入标注内容（页面上可见的文字框）', '', (content: string) => {
           if (!content.trim()) {
             return;
           }
-          const op: EditTextAnnotOp = {
-            op: 'addTextAnnot',
+          const op: EditFreeTextOp = {
+            op: 'addFreeText',
             page: page,
             x: x,
             y: y,
+            width: 180,
             content: content,
-            color: 0x1A1A1F
+            fillColor: 0xFFF3B0,
+            textColor: 0x1A1A1F,
+            fontSize: 14
           };
           this.pushOp(op);
           this.selectLastOp();
@@ -1030,6 +1137,19 @@ struct PDFEditPage {
     this.ocrMode = false;
     this.ocrBusy = false;
     this.ocrBlocks = [];
+    this.ocrForRewrite = false;
+  }
+
+  // 扫描/图片型 PDF：没有文本层时自动转 OCR 覆盖式修改
+  private startOcrForRewrite(): void {
+    this.ocrForRewrite = true;
+    this.ocrMode = true;
+    this.ocrBlocks = [];
+    this.ocrBusy = true;
+    this.ocrProgress = 0;
+    this.activedTool = -1;
+    this.statusMsg = '未检测到文字层（扫描/图片页），正在 OCR 识别…';
+    this.runOcr();
   }
 
   private async runOcr(): Promise<void> {
@@ -1038,24 +1158,57 @@ struct PDFEditPage {
       this.showToast('请先打开 PDF 文件');
       return;
     }
-    const result: OCRResult = await this.ocrService.recognize(this.filePath, {
-      startPage: this.currentPage,
-      endPage: this.currentPage
-    }, (p: OCRProgress) => {
-      this.ocrProgress = p.percent;
-    });
-    if (result.pages.length > 0) {
-      this.ocrBlocks = result.pages[0].blocks;
-      this.statusMsg = `识别到 ${this.ocrBlocks.length} 个文本块，点击块可修改`;
-    } else {
-      this.statusMsg = '未识别到文本';
+    try {
+      const result: OCRResult = await this.ocrService.recognize(this.filePath, {
+        startPage: this.currentPage,
+        endPage: this.currentPage
+      }, (p: OCRProgress) => {
+        this.ocrProgress = p.percent;
+      });
+      if (result.pages.length > 0 && result.pages[0].blocks.length > 0) {
+        this.ocrBlocks = result.pages[0].blocks;
+        this.statusMsg = this.ocrForRewrite
+          ? `扫描版：识别到 ${this.ocrBlocks.length} 个文字块，点击蓝色框覆盖修改`
+          : `识别到 ${this.ocrBlocks.length} 个文本块，点击块可修改`;
+      } else {
+        this.statusMsg = '未识别到文本，可换更清晰的图片页重试';
+      }
+    } catch (err) {
+      console.error('OCR failed', JSON.stringify(err));
+      this.statusMsg = 'OCR 识别失败，请重试';
+      this.showToast('OCR 识别失败');
+    } finally {
+      this.ocrBusy = false;
     }
-    this.ocrBusy = false;
   }
 
   private onOcrBlockTap(block: TextBlock, x: number, y: number): void {
     const sp = this.scrollParam;
     if (!sp || sp.pdfWidth <= 0 || sp.pdfHeight <= 0) {
+      return;
+    }
+    if (this.ocrForRewrite) {
+      // 覆盖式修改：白底 FreeText 注释盖住原文字，再写新文字
+      this.promptTextInput('修改识别文字（白底覆盖原文字）', block.text, (value: string) => {
+        if (!value.trim()) {
+          return;
+        }
+        const fs = block.height > 0 ? Math.max(8, Math.round(block.height * 0.8)) : 12;
+        const op: EditFreeTextOp = {
+          op: 'addFreeText',
+          page: this.currentPage,
+          x: block.x,
+          y: block.y,
+          width: Math.max(block.width, 24),
+          content: value,
+          fillColor: 0xFFFFFF,
+          textColor: 0x000000,
+          fontSize: fs
+        };
+        this.pushOp(op);
+        this.selectLastOp();
+        this.statusMsg = '已覆盖修改（保存后生效）';
+      });
       return;
     }
     const pos = this.screenToPdf(x, y, sp, this.controller.getPageZoom());
@@ -1223,8 +1376,7 @@ struct PDFEditPage {
         return;
       }
       if (result.blocks.length === 0) {
-        this.activedTool = -1;
-        this.showRewriteError('此页无文本或为扫描版，无法修改');
+        this.startOcrForRewrite();
         return;
       }
       this.rewriteBlocks = result.blocks;
@@ -1651,6 +1803,9 @@ struct PDFEditPage {
                 }
                 .width('100%')
                 .padding({ top: 12, bottom: 8 })
+              }
+              if (this.activedTool === 2 && this.hlDragging) {
+                this.hlDragPreview()
               }
             }
             .width('100%')
