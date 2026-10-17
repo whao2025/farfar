@@ -418,11 +418,11 @@ PDF 阅读器类应用可能被判定"功能单一、缺乏实质服务"而驳�
 - 当前基线：HarmonyOS 6.1.1 = API 24（2026/05/26 转正）；鸿蒙 7 已正式发布，工程需尽快升级到 API 26 基线。
 - **HarmonyOS 7 = API 26.0.0**：SDK 26.0.0 Release 已于 2026/08/29 发布；开发套件版本号自 26.0.0 起改为语义化 `X.Y.Z`。
 - 配套工具链（官方配套关系）：DevEco Studio **26.0.0 Release 26.0.0.851**（Patch，2026/09/23；基线 .821）、Hvigor **6.26.8**、ohpm 26.0.0.630、Node.js 24.14.1、**modelVersion 26.0.0**、compileSdkVersion 26.0.0。
-- 升级步骤（配置项已应用，见 `docs/HARMONYOS7_MIGRATION.md`）：
-  1. 安装 DevEco Studio 26.0.0.851（或 Command Line Tools 26.0.0.851；**HarmonyOS SDK 内嵌其中**，下载中心需登录华为账号）—— ⏳ 当前阻塞项
+- 升级步骤（✅ **已完成 API 26 构建**，见 `docs/HARMONYOS7_MIGRATION.md`）：
+  1. ✅ 安装 DevEco Studio 26.0.0.851（`D:\DevEcoStudio26`，HarmonyOS SDK 26.0.0 内嵌）；旧版 6.1.1 + SDK 24 仍保留在 `C:\Program Files\Huawei\DevEco Studio` 可回退
   2. ✅ `build-profile.json5`：`targetSdkVersion` → `26.0.0`；`compatibleSdkVersion` 保持 `6.1.1(24)`（继续支持鸿蒙 6.x）
   3. ✅ `hvigor/hvigor-config.json5`、`oh-package.json5`：`modelVersion` → `26.0.0`
   4. `AppScope/app.json5` 的 minAPIVersion/targetAPIVersion **无需手改**：官方文档明确二者在编译时由 build-profile 自动生成（手动配置无效）
-  5. ⏳ 用 API Change Assistant（SDK 24→26）扫描行为变更 → 重新构建 → 新老设备回归 → 提审
+  5. ⏳ 用 API Change Assistant（SDK 24→26）扫描行为变更 → 新老设备回归（当前本机无设备连接）→ 提审；构建已通过（WARN 0）
 - 完整适配方案（行为变更逐条影响分析、验证清单、回滚）：见 `docs/HARMONYOS7_MIGRATION.md`
 - 注意：API 25 无官方发布版本，不要使用；HarmonyOS 7 正式版 SDK（releaseType=Release）才可商用上架。

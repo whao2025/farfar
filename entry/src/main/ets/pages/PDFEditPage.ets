@@ -347,14 +347,16 @@ struct PDFEditPage {
     Row({ space: 10 }) {
       ForEach(HIGHLIGHT_COLORS, (c: number) => {
         Stack({ alignContent: Alignment.Center }) {
-          if (c === this.highlightColor) {
-            Circle({ width: 34, height: 34 })
-              .fill(Color.Transparent)
-              .stroke(Color.White)
-              .strokeWidth(3)
-          }
-          Circle({ width: 28, height: 28 })
-            .fill(c)
+          Column()
+            .width(34)
+            .height(34)
+            .borderRadius(17)
+            .border({ width: 3, color: c === this.highlightColor ? Color.White : Color.Transparent })
+          Column()
+            .width(28)
+            .height(28)
+            .borderRadius(14)
+            .backgroundColor(c)
         }
         .width(34)
         .height(34)

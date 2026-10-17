@@ -45,25 +45,37 @@
 
 注：升级后 Hvigor 为 **6.26.8**，必须用 **DevEco 26 自带 hvigor** 构建；旧的 6.24.3 会直接拒绝 modelVersion 26.0.0。
 
-### 当前进度：配置已迁移，**构建卡在工具链**
+### 当前进度：✅ **API 26 构建已通过（2026-10-18）**
 
-已实测（2026-10-18）：在 DevEco 6.1.1（Hvigor 6.24.3）下执行 `scripts/build.ps1 -Mode release`：
+工具链已就绪：**DevEco Studio 26.0.0.851** 安装于 `D:\DevEcoStudio26`（SDK 26.0.0 / Hvigor 6.26.8 / Node 24.14.1），与旧版 6.1.1 + SDK 24 **并存**（旧版未动，可回退）。
+`scripts/build.ps1` 已改为**自动探测** DevEco 安装路径（优先 `D:\DevEcoStudio26`，回退 `C:\Program Files\Huawei\DevEco Studio`），可用 `-DevEcoHome` 覆盖。
+
+构建结果（`build.ps1 -Mode release -Clean`）：
 
 ```text
-> hvigor ERROR: 00303028 Configuration Error
-Error Message: Unsupported modelVersion of Hvigor 26.0.0.
-  > The supported Hvigor modelVersion is 6.1.1.
-> hvigor ERROR: BUILD FAILED in 2 s 949 ms
+DevEco: D:\DevEcoStudio26 (SDK: HarmonyOS 26.0.0)
+> hvigor BUILD SUCCESSFUL in 20 s 100 ms
+BUILD release SUCCESS
+WARN 0 / ERROR 0
 ```
 
-即：**配置已到位，只等 DevEco Studio 26.0.0.851 / Command Line Tools 26.0.0.851**（内含 HarmonyOS SDK 26.0.0）。
-安装完成后预期还要处理：①SDK 26 下新编译器告警/错误；②target≥26 后 Dialog/Toast 默认沉浸材质观感；③真机回归。
+产物 `entry/build/default/outputs/default/entry-default-signed.hap`（8.68MB），`pack.info` 校验：
+`"apiVersion":{"compatible":24,"releaseType":"Release","target":26}` —— 与“target 26 + 兼容 24”策略一致。
 
-回滚（临时回到 6.x 基线可构建状态）：
+### 升级过程中遇到并已解决的 3 个问题
+
+1. **Hvigor 6.24.3 拒绝 modelVersion 26.0.0**（`00303028`）→ 升级 IDE 后消失（Hvigor 6.26.8）。
+2. **SignHap `00308018` / `ENOENT: no such file or directory, stat 'D:\freepdf\material'`**
+   → 根因：DevEco 6+ 将签名密码的**解密密钥放在项目根 `material/` 目录**（5 个 16–48 字节文件），hvigor 的 `DecipherUtil.getKey` 会 stat 该目录；清理 git 历史时该目录被误删 → 从备份恢复后签名通过。
+   ⚠️ **`material/` 绝对不能删**（.gitignore 忽略可以，但本地必须保留）。
+3. **API 26 编译器告警 3 条**：`PDFEditPage.ets` 高亮色选择器用 `Circle().fill()/.stroke()`，SDK 26 为 CircleAttribute 新增了 `fill/stroke(ResourceColor|ColorMetrics)` 重载（@since 26.0.0），在 compatible=24 下告警 → 改为 `Column` + `borderRadius/backgroundColor/border` 实现同视觉，**WARN 归零**。
+
+### 回滚（回到 6.x 基线）
 ```bash
 git checkout -- build-profile.json5 oh-package.json5
 # 并把 hvigor/hvigor-config.json5 的 modelVersion 改回 5.0.0
 ```
+旧 IDE 与 SDK 24 仍在 `C:\Program Files\Huawei\DevEco Studio`（未改动）。
 
 ## 3. API 26 行为变更影响分析（已逐条对照本工程源码）
 

@@ -33,13 +33,13 @@
 
 **禁抄清单**：`ImmersiveMaterial`/`systemMaterial`/`backdropBlur`（API26+）、系统 `isDarkMode` 取色（须走 `@StorageProp('darkMode')`+GlassTokens）、第三方图表库/SwitchChart 整抄（自绘）、`HdsTabs`（编译器 10905201）、`dialog_hub`/`ui-viewer`（不入依赖）。
 
-### 🔺 鸿蒙 7 / API 26 升级（2026-10-18 启动）
-> 方案与行为变更影响分析见 [docs/HARMONYOS7_MIGRATION.md](HARMONYOS7_MIGRATION.md)（已逐条对照源码）。
-- [x] 官方升级方案落盘 + API 26 行为变更影响审计（结论：代码几乎无必改项，风险在 Dialog/Toast 默认沉浸材质观感与新编译器告警）
-- [ ] 工具链升级：DevEco Studio 26.0.0.851 / Command Line Tools 26.0.0.851（SDK 26.0.0 内嵌）—— **当前阻塞：需登录华为账号下载，本机只有 6.1.1 + SDK 24**
-- [ ] 配置迁移：targetSdkVersion→`26.0.0`、modelVersion→`26.0.0`、targetAPIVersion→`26.0.0`（compatibleSdkVersion 建议保持 `6.1.1(24)`）
-- [ ] 编译修复 + API Change Assistant（24→26）+ codelinter 清零
-- [ ] HarmonyOS 7.0 新设备全量回归 + 6.x 老设备冒烟；结果回写 TEST_CHECKLIST
+### 🔺 鸿蒙 7 / API 26 升级（2026-10-18 **构建已通过**）
+> 方案、行为变更影响分析、踩坑记录见 [docs/HARMONYOS7_MIGRATION.md](HARMONYOS7_MIGRATION.md)。
+- [x] 官方升级方案落盘 + API 26 行为变更影响审计（结论：代码几乎无必改项）
+- [x] 工具链升级：DevEco Studio **26.0.0.851** 安装于 `D:\DevEcoStudio26`（SDK 26.0.0 / Hvigor 6.26.8 / Node 24），旧版 6.1.1 + SDK 24 保留
+- [x] 配置迁移：targetSdkVersion `26.0.0`、modelVersion `26.0.0`、compatibleSdkVersion 保持 `6.1.1(24)`；app.json5 的 min/targetAPIVersion 由构建自动生成，无需手改
+- [x] 编译修复：`build.ps1` 自动探测 IDE；Circle fill/stroke 告警改写；**release clean 构建 WARN 0 / ERROR 0**，产物 target=26 / compatible=24
+- [ ] HarmonyOS 7.0 新设备全量回归 + 6.x 老设备冒烟（当前本机无设备连接）；结果回写 TEST_CHECKLIST
 
 ### 📅 规划中 (v0.6+)
 | 功能 | 优先级 | 预计工时 | 依赖 | 会话 |
