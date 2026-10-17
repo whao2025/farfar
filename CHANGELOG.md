@@ -2,6 +2,19 @@
 
 所有显著变更按时间倒序记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.6.0-edit-fix] - 2026-10-18
+
+### 修复（PDF 编辑全链路，待真机复验）
+- **点击编辑全部失效的根因**：`onOverlayTouch` 在 `TouchType.Up` 只读 `event.touches`（Up 时可能为空）。改为统一取 `changedTouches`（回退 `touches`），文本/图片/高亮/标注/改字的点选恢复。
+- **高亮改为拖拽矩形**：Down/Move/Up 记录起止点、实时预览，松手按真实矩形落 op；顶部颜色/宽度控制区不再误触发放置（原为点击固定 200×30）。
+- **扫描/图片型 PDF 支持"改字"**：`listTextObjects` 无文本层时不再直接报错，自动转 OCR；点识别块后以 **FreeText 白底注释覆盖原文字 + 写新文字**（新增 `EditFreeTextOp`）；OCR 补 try/catch/失败提示。
+- **标注在页面上可见**：`addTextAnnot` 由 TEXT 便签注释（PdfView 不渲染）改为 **FreeText 注释**（浅黄底 + 文字）。
+- **改字保留原文字颜色**：回写时读取 `GraphicsObject.fillColor` 写入 `TextStyle.textColor`，修复改字后文字变黑。
+- **文本块包围盒按官方语义修正**：`PdfRect.left/right` 为 x 坐标、`top/bottom` 为 y 坐标（之前误当"距页边距离"，导致块框/命中偏移）。
+
+### 依赖
+- 鸿蒙 7 / API 26（targetSdkVersion `26.0.0`，compatibleSdkVersion `6.1.1(24)`），DevEco Studio 26.0.0.851。
+
 ## [0.5.1] - 2026-08-11
 
 ### 新增
