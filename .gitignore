@@ -54,3 +54,8 @@ data/labels.json
 
 # App build outputs (signed/unsigned .app packages)
 build/outputs/
+
+# Scratch / caches (never commit)
+.npmcache/
+tmp/
+material/
