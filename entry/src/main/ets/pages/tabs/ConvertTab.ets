@@ -96,6 +96,14 @@ export struct ConvertTab {
             .layoutWeight(1)
         }
         .width('100%')
+
+        Row({ space: 10 }) {
+          GlassButton({ label: 'PDF转Word', dark: this.dark, heightVp: 44, fontSize: 14, onClickHandler: () => this.openConvert('pdfToWord') })
+            .layoutWeight(1)
+          GlassButton({ label: 'Word转PDF', dark: this.dark, heightVp: 44, fontSize: 14, onClickHandler: () => this.openConvert('wordToPdf') })
+            .layoutWeight(1)
+        }
+        .width('100%')
       }
       .width('100%')
       .padding({ left: 24, right: 24, top: 8, bottom: 8 })

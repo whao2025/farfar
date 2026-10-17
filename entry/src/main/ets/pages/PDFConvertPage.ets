@@ -12,6 +12,7 @@ import { extractTextAsync } from '../utils/PDFEditUtils';
 import { extractTextWithOCRFallback, isAllPageMarkers } from '../utils/PDFOCRUtils';
 import { saveSandboxFile } from '../utils/PickerSaveUtils';
 import { pickAndCopyPDF } from '../utils/PDFImportUtils';
+import { pdfToDocxAsync, docxToPdfAsync, pickAndCopyDocx } from '../utils/WordConvertUtils';
 
 interface ConvertPageParams {
   mode?: string;
@@ -48,6 +49,12 @@ struct PDFConvertPage {
     if (this.mode === 'pdfToCredit') {
       return 'PDF 转记账';
     }
+    if (this.mode === 'pdfToWord') {
+      return 'PDF 转 Word';
+    }
+    if (this.mode === 'wordToPdf') {
+      return 'Word 转 PDF';
+    }
     return 'PDF 转图片';
   }
 
@@ -60,6 +67,12 @@ struct PDFConvertPage {
     }
     if (this.mode === 'pdfToCredit') {
       return '提取 PDF 文本，自动识别账单记录，保存到记账';
+    }
+    if (this.mode === 'pdfToWord') {
+      return '文字型 PDF 直接提取；扫描件自动 OCR 识别，生成可编辑 Word';
+    }
+    if (this.mode === 'wordToPdf') {
+      return '选择 Word(.docx)，按段落生成 PDF（纯本地）';
     }
     return '将 PDF 每页导出为 PNG 图片';
   }
@@ -84,6 +97,62 @@ struct PDFConvertPage {
       this.runPdfToText(context);
     } else if (this.mode === 'pdfToCredit') {
       this.runPdfToCredit(context);
+    } else if (this.mode === 'pdfToWord') {
+      this.runPdfToWord(context);
+    } else if (this.mode === 'wordToPdf') {
+      this.runWordToPdf(context);
+    }
+  }
+
+  private async runPdfToWord(context: common.Context): Promise<void> {
+    try {
+      const srcPath = await pickAndCopyPDF(context);
+      if (!srcPath) {
+        this.busy = false;
+        return;
+      }
+      this.statusMsg = '提取文本中（扫描件将自动 OCR）…';
+      const docxPath = await pdfToDocxAsync(context, srcPath);
+      if (!docxPath) {
+        this.showToast('转换失败：未识别到可用文字');
+        this.busy = false;
+        return;
+      }
+      const base = srcPath.split('/').pop() ?? 'document.pdf';
+      const name = base.replace(/\.pdf$/i, '') + '.docx';
+      this.statusMsg = '已生成 Word，选择保存位置…';
+      const saved = await saveSandboxFile(context, docxPath, name, '.docx');
+      this.showToast(saved ? '已导出 Word 文档' : '已生成，未选择导出位置');
+    } catch (err) {
+      console.error('pdfToWord failed', JSON.stringify(err));
+      this.showToast('转换失败');
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  private async runWordToPdf(context: common.Context): Promise<void> {
+    try {
+      const docxPath = await pickAndCopyDocx(context);
+      if (!docxPath) {
+        this.busy = false;
+        return;
+      }
+      this.statusMsg = '解析 Word 并生成 PDF…';
+      const pdfPath = await docxToPdfAsync(context, docxPath);
+      if (!pdfPath) {
+        this.showToast('转换失败：Word 解析失败');
+        this.busy = false;
+        return;
+      }
+      this.statusMsg = '已生成 PDF，选择保存位置…';
+      const saved = await saveSandboxFile(context, pdfPath, 'converted.pdf', '.pdf');
+      this.showToast(saved ? '已导出 PDF' : '已生成，未选择导出位置');
+    } catch (err) {
+      console.error('wordToPdf failed', JSON.stringify(err));
+      this.showToast('转换失败');
+    } finally {
+      this.busy = false;
     }
   }
 

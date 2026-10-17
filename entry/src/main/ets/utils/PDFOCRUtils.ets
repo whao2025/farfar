@@ -41,6 +41,38 @@ export function isAllPageMarkers(text: string): boolean {
   return lines.every(l => /^---\s*第\s*\d+\s*页\s*---$/.test(l));
 }
 
+
+export async function ocrPdfPagesAsync(pdfPath: string): Promise<string[]> {
+  let doc: pdfService.PdfDocument | null = null;
+  try {
+    doc = new pdfService.PdfDocument();
+    const result = doc.loadDocument(pdfPath, '');
+    if (result !== pdfService.ParseResult.PARSE_SUCCESS) {
+      return [];
+    }
+    const count = doc.getPageCount();
+    const pdf: pdfService.PdfDocument = doc;
+    return await runOcrSession(async () => {
+      const pages: string[] = [];
+      const config: textRecognition.TextRecognitionConfiguration = {
+        isDirectionDetectionSupported: true
+      };
+      for (let i = 0; i < count; i++) {
+        const page = pdf.getPage(i);
+        pages.push(await recognizePageHiRes(page, config));
+      }
+      return pages;
+    });
+  } catch (err) {
+    console.error('ocrPdfPages failed', JSON.stringify(err));
+    return [];
+  } finally {
+    if (doc) {
+      doc.releaseDocument();
+    }
+  }
+}
+
 export async function ocrPdfAsync(pdfPath: string): Promise<string> {
   let doc: pdfService.PdfDocument | null = null;
   try {

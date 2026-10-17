@@ -1898,7 +1898,6 @@ struct PDFEditPage {
           PdfEditToolItem({ label: '图片', icon: $r('sys.symbol.picture_fill'), dark: this.dark, actived: this.activedTool === 1, onClickHandler: () => this.onAddImage() })
           PdfEditToolItem({ label: '高亮', icon: $r('sys.symbol.highlighter_line'), dark: this.dark, actived: this.activedTool === 2, onClickHandler: () => this.onAddHighlight() })
           PdfEditToolItem({ label: '标注', icon: $r('sys.symbol.square_and_pencil_fill'), dark: this.dark, actived: this.activedTool === 3, onClickHandler: () => this.onAddTextAnnot() })
-          PdfEditToolItem({ label: '改字', icon: $r('sys.symbol.character_arrow_2_circlepath'), dark: this.dark, actived: this.activedTool === 4, onClickHandler: () => this.onRewriteText() })
           PdfEditToolItem({ label: '插页', icon: $r('sys.symbol.plus_circle'), dark: this.dark, actived: this.activedTool === 5, onClickHandler: () => this.onInsertPage() })
           PdfEditToolItem({ label: '删页', icon: $r('sys.symbol.trash_fill'), dark: this.dark, actived: this.activedTool === 6, onClickHandler: () => this.onDeletePage() })
           PdfEditToolItem({ label: '合并', icon: $r('sys.symbol.rectangle_on_rectangle_fill'), dark: this.dark, actived: this.activedTool === 7, onClickHandler: () => this.onMergePDF() })
