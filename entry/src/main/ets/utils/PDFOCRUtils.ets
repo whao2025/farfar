@@ -219,13 +219,14 @@ async function recognizePageHiRes(page: pdfService.PdfPage, config: textRecognit
     return '';
   }
   const scale = calcSafeScale(w, h);
+  // 精度优先：彩色 + 灰度始终双跑并合并（拍照/投影等彩色背景、低对比场景灰度往往更准）
   const colorText = await recognizeOnce(page, w, h, scale, false, config);
-  if (colorText.trim().length >= 30) {
-    return normalizeOcrText(colorText);
-  }
   const grayText = await recognizeOnce(page, w, h, scale, true, config);
   if (grayText.trim().length === 0) {
     return normalizeOcrText(colorText);
+  }
+  if (colorText.trim().length === 0) {
+    return normalizeOcrText(grayText);
   }
   return normalizeOcrText(mergeUniqueLines(colorText, grayText));
 }
