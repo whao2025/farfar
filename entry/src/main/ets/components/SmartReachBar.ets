@@ -37,6 +37,13 @@ export struct SmartReachBar {
     .backgroundColor(color)
     .onClick(() => onTap())
     .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.96 })
+    .stateStyles({
+      pressed: {
+        .scale({ x: 0.9, y: 0.9 })
+        .brightness(1.1)
+        .opacity(0.9)
+      }
+    })
     .shadow({
       radius: 8 * 0.6,
       color: 'rgba(0,0,0,0.3)',
@@ -56,7 +63,7 @@ export struct SmartReachBar {
     .backgroundBlurStyle(GlassTokens.BLUR_BUTTON)
     .backgroundColor(this.dark ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.30)')
     .borderRadius((this.BALL_SIZE + this.PADDING * 2) / 2)
-    .gesture(
+    .priorityGesture(
       PanGesture({ fingers: 1, distance: 8 })
         .onActionStart(() => this.onReachDragStart())
         .onActionUpdate((event: GestureEvent) => this.onReachDragMove(event.offsetX))

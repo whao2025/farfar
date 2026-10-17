@@ -18,6 +18,7 @@ interface LabelsConfig {
 export interface ClassificationResult {
   category: string;
   confidence: number;
+  secondConfidence?: number;
 }
 
 export class BillClassifier {
@@ -71,7 +72,9 @@ export class BillClassifier {
     try {
       const res = await this.classify('美团外卖 消费');
       if (res) {
-        console.log('BillClassifier warmup ok, category=' + res.category + ', conf=' + res.confidence.toFixed(3));
+        console.log('BillClassifier warmup ok, category=' + res.category + ', conf=' + res.confidence.toFixed(3)
+          + ', sec=' + (res.secondConfidence ?? 0).toFixed(3)
+          + ', margin=' + (res.confidence - (res.secondConfidence ?? 0)).toFixed(3));
       } else {
         console.error('BillClassifier warmup returned null');
       }
@@ -215,9 +218,13 @@ export class BillClassifier {
         }
 
         let maxIdx = 0;
+        let secondIdx = -1;
         for (let i = 1; i < logits.length; i++) {
           if (logits[i] > logits[maxIdx]) {
+            secondIdx = maxIdx;
             maxIdx = i;
+          } else if (secondIdx < 0 || logits[i] > logits[secondIdx]) {
+            secondIdx = i;
           }
         }
 
@@ -228,11 +235,13 @@ export class BillClassifier {
           sumExp += expValues[i];
         }
         const confidence = sumExp > 0 ? expValues[maxIdx] / sumExp : 0;
+        const secondConfidence = sumExp > 0 && secondIdx >= 0 ? expValues[secondIdx] / sumExp : 0;
 
         const category = maxIdx < this.categoryNames.length ? this.categoryNames[maxIdx] : '其他';
         return {
           category: category,
-          confidence: confidence
+          confidence: confidence,
+          secondConfidence: secondConfidence
         };
       } catch (err) {
         console.error('BillClassifier classify failed:', JSON.stringify(err));

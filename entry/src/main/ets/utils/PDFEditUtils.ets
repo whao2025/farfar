@@ -67,10 +67,12 @@ export interface EditRewriteTextOp {
   index: number;
   newText: string;
   newSize: number;
+  batchId?: string;
 }
 
 export interface TextBlockInfo {
   index: number;
+  id: string;
   text: string;
   size: number;
   x: number;
@@ -400,6 +402,7 @@ export async function listTextObjectsAsync(srcPath: string, pageIndex: number): 
       const font = parsed.fonts[i];
       blocks.push({
         index: i,
+        id: `${pageIndex}_${i}`,
         text: parsed.texts[i],
         size: parsed.sizes[i],
         x: parsed.xs[i],

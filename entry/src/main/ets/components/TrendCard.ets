@@ -1,5 +1,6 @@
 import { GlassTokens } from '../theme/GlassTokens';
 import { WeekDaySpending, CategoryStat } from '../model/RecordModel';
+import curves from '@ohos.curves';
 
 @Component
 export struct TrendCard {
@@ -45,6 +46,38 @@ export struct TrendCard {
     return palette[i % palette.length];
   }
 
+  private weekMax(): number {
+    let max = 0;
+    for (let i = 0; i < this.weekData.length; i++) {
+      if (this.weekData[i].amount > max) {
+        max = this.weekData[i].amount;
+      }
+    }
+    return max;
+  }
+
+  private isMaxBar(amount: number): boolean {
+    const m = this.weekMax();
+    return amount > 0 && m > 0 && amount === m;
+  }
+
+  private isOverBudget(amount: number): boolean {
+    return this.dailyBudget > 0 && amount > this.dailyBudget;
+  }
+
+  private barGradient(item: WeekDaySpending, isToday: boolean): Array<[string, number]> {
+    if (isToday) {
+      return [[GlassTokens.ACCENT_BLUE, 0], [GlassTokens.ACCENT_SKY, 1]];
+    }
+    if (this.isOverBudget(item.amount)) {
+      return [[GlassTokens.DANGER, 0], [GlassTokens.WARN, 1]];
+    }
+    if (this.isMaxBar(item.amount)) {
+      return [[GlassTokens.PURPLE, 0], [GlassTokens.CYAN, 1]];
+    }
+    return [[GlassTokens.NEUTRAL_DARK, 0], [GlassTokens.NEUTRAL_LIGHT, 1]];
+  }
+
   private vsLastText(): string {
     if (this.lastMonthExpense <= 0) return '无上月对比';
     const diff = this.monthlyExpense - this.lastMonthExpense;
@@ -65,7 +98,9 @@ export struct TrendCard {
     Column() {
       Text(item.amount > 0 ? this.shortAmount(item.amount) : '')
         .fontSize(9)
-        .fontColor(this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
+        .fontColor(this.isOverBudget(item.amount)
+          ? GlassTokens.DANGER
+          : (this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT))
         .margin({ bottom: 4 })
         .maxLines(1)
 
@@ -76,10 +111,9 @@ export struct TrendCard {
           .borderRadius({ topLeft: 5, topRight: 5, bottomLeft: 3, bottomRight: 3 })
           .linearGradient({
             direction: GradientDirection.Bottom,
-            colors: isToday
-              ? [[GlassTokens.ACCENT_BLUE, 0], [GlassTokens.ACCENT_SKY, 1]]
-              : [[GlassTokens.NEUTRAL_DARK, 0], [GlassTokens.NEUTRAL_LIGHT, 1]]
+            colors: this.barGradient(item, isToday)
           })
+          .animation({ duration: 400, curve: curves.springMotion(0.6, 0.9, 0) })
 
         if (this.budgetLineY() >= 0) {
           Row()

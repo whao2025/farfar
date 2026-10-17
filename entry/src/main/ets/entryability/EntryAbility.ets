@@ -4,6 +4,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { privacyManager } from '@kit.AppGalleryKit';
 import { Breakpoint } from '../theme/Breakpoint';
 import { DarkModeStore, DarkModeOverride } from '../utils/DarkModeStore';
+import { ensureRuleDataLoaded } from '../model/RecordModel';
 
 class DarkModeEnvCallback extends EnvironmentCallback {
   onConfigurationUpdated(config: Configuration): void {
@@ -31,7 +32,8 @@ export default class EntryAbility extends UIAbility {
     AppStorage.setOrCreate('userDarkModeOverride', false);
     AppStorage.setOrCreate('fileFilterMode', 'all');
     this.syncDarkModeFromSystem();
-      windowStage.loadContent('pages/Splash', (err: BusinessError) => {
+    ensureRuleDataLoaded(this.context);
+    windowStage.loadContent('pages/Splash', (err: BusinessError) => {
         if (err.code) {
           return;
         }

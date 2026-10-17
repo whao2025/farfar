@@ -2,8 +2,19 @@ import { common } from '@kit.AbilityKit';
 import { GlassTokens } from '../theme/GlassTokens';
 import { GlassToolbar } from '../components/GlassToolbar';
 import { GlassButton } from '../components/GlassButton';
-import { Suggestion, BookkeepingRecord, RecordStatus, RecordSource } from '../model/RecordModel';
+import { CategoryPicker } from '../components/CategoryPicker';
+import {
+  Suggestion,
+  BookkeepingRecord,
+  RecordStatus,
+  RecordSource,
+  RecordType,
+  CategoryInfo,
+  EXPENSE_CATEGORIES,
+  INCOME_CATEGORIES
+} from '../model/RecordModel';
 import { AutoCategorizer } from '../utils/AutoCategorizer';
+import { ensureMlForImg } from '../utils/MlActivation';
 import { recordDb } from '../utils/RecordDatabase';
 
 const MIN_AUTO_CONFIDENCE = 0.4;
@@ -26,6 +37,7 @@ struct BookkeepingConfirmPage {
   @State suggestions: Suggestion[] = [];
   @State selected: boolean[] = [];
   @State savedCount: number = 0;
+  @State activeCatIdx: number = -1;
 
   aboutToAppear(): void {
     const params = this.getUIContext().getRouter().getParams() as ConfirmPageParams;
@@ -33,8 +45,23 @@ struct BookkeepingConfirmPage {
     this.pdfText = params?.text ?? '';
     this.source = params?.source ?? 'pdf-text';
     if (this.pdfText) {
-      this.parseText();
+      if (this.source === 'img-ocr') {
+        // 图片记账强制 ML：先等模型就绪再解析，否则首批分类会因 isLoaded=false 空转
+        this.prepareAndParse();
+      } else {
+        this.parseText();
+      }
     }
+  }
+
+  private async prepareAndParse(): Promise<void> {
+    this.busy = true;
+    this.statusMsg = '加载智能分类…';
+    const ctx = this.getUIContext().getHostContext();
+    if (ctx) {
+      await ensureMlForImg(ctx as common.Context);
+    }
+    await this.parseText();
   }
 
   private async parseText(): Promise<void> {
@@ -55,6 +82,60 @@ struct BookkeepingConfirmPage {
 
   private toggleIndex(idx: number): void {
     this.selected = this.selected.map((v: boolean, i: number): boolean => i === idx ? !v : v);
+  }
+
+  private toggleCat(idx: number): void {
+    this.activeCatIdx = this.activeCatIdx === idx ? -1 : idx;
+  }
+
+  private getCatsFor(item: Suggestion): string[] {
+    if (item.type === 'income') {
+      return INCOME_CATEGORIES.map((c: CategoryInfo): string => c.name);
+    }
+    return EXPENSE_CATEGORIES.map((c: CategoryInfo): string => c.name);
+  }
+
+  private rebuildAt(idx: number, updated: Suggestion): void {
+    this.suggestions = this.suggestions.map((x: Suggestion, i: number): Suggestion => i === idx ? updated : x);
+  }
+
+  private setCategory(idx: number, name: string): void {
+    const s = this.suggestions[idx];
+    const updated: Suggestion = {
+      amount: s.amount,
+      type: s.type,
+      category: name,
+      confidence: s.confidence,
+      note: s.note,
+      merchant: s.merchant,
+      date: s.date,
+      timestamp: s.timestamp,
+      source: s.source
+    };
+    this.rebuildAt(idx, updated);
+  }
+
+  private setType(idx: number, type: RecordType): void {
+    const s = this.suggestions[idx];
+    if (s.amount < 0 && type === 'income') {
+      this.statusMsg = '退款记录不建议转为收入';
+    }
+    const isIncome = type === 'income';
+    const catOk: boolean = isIncome
+      ? INCOME_CATEGORIES.some((c: CategoryInfo): boolean => c.name === s.category)
+      : EXPENSE_CATEGORIES.some((c: CategoryInfo): boolean => c.name === s.category);
+    const updated: Suggestion = {
+      amount: Math.abs(s.amount),
+      type: type,
+      category: catOk ? s.category : '其他',
+      confidence: s.confidence,
+      note: s.note,
+      merchant: s.merchant,
+      date: s.date,
+      timestamp: s.timestamp,
+      source: s.source
+    };
+    this.rebuildAt(idx, updated);
   }
 
   private setFromCheckbox(idx: number, val: boolean): void {
@@ -181,8 +262,8 @@ struct BookkeepingConfirmPage {
                         .select(this.selected[idx])
                         .onChange((v: boolean) => this.setFromCheckbox(idx, v))
                         .hitTestBehavior(HitTestMode.Block)
-                      Column() {
-                        Row() {
+Column({ space: 4 }) {
+        Row() {
                           Text(item.type === 'income' ? '+¥' : '-¥')
                             .fontSize(16)
                             .fontColor(item.type === 'income' ? '#10B981' : '#EF4444')
@@ -191,13 +272,18 @@ struct BookkeepingConfirmPage {
                             .fontSize(16)
                             .fontColor(this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
                             .fontWeight(FontWeight.Bold)
-                          Blank()
-                          Text(`[${item.category}]`)
-                            .fontSize(12)
-                            .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
-                        }
-                        .width('100%')
-                        .alignItems(VerticalAlign.Center)
+Blank()
+          Text(this.activeCatIdx === idx ? '收起' : '调整')
+            .fontSize(11)
+            .fontColor(this.dark ? '#10B981' : '#059669')
+            .onClick(() => this.toggleCat(idx))
+            .hitTestBehavior(HitTestMode.Block)
+          Text(`[${item.category}]`)
+            .fontSize(12)
+            .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
 
                         Text(item.note)
                           .fontSize(11)
@@ -205,11 +291,48 @@ struct BookkeepingConfirmPage {
                           .textAlign(TextAlign.Start)
                           .maxLines(2)
 
-                        Text(`置信度 ${(item.confidence * 100).toFixed(0)}%`)
-                          .fontSize(10)
-                          .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
-                      }
-                      .layoutWeight(1)
+Text(`置信度 ${(item.confidence * 100).toFixed(0)}%`)
+          .fontSize(10)
+          .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
+
+        if (this.activeCatIdx === idx) {
+          Row({ space: 8 }) {
+            Text('支出')
+              .fontSize(12)
+              .fontWeight(item.type === 'expense' ? FontWeight.Medium : FontWeight.Normal)
+              .fontColor(item.type === 'expense'
+                ? (this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
+                : (this.dark ? '#A9A9B5' : '#6B6B76'))
+              .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+              .borderRadius(12)
+              .border({ width: 1, color: item.type === 'expense'
+                ? (this.dark ? GlassTokens.BORDER_DARK : GlassTokens.BORDER_LIGHT)
+                : Color.Transparent })
+              .onClick(() => this.setType(idx, 'expense'))
+              .hitTestBehavior(HitTestMode.Block)
+            Text('收入')
+              .fontSize(12)
+              .fontWeight(item.type === 'income' ? FontWeight.Medium : FontWeight.Normal)
+              .fontColor(item.type === 'income'
+                ? (this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
+                : (this.dark ? '#A9A9B5' : '#6B6B76'))
+              .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+              .borderRadius(12)
+              .border({ width: 1, color: item.type === 'income'
+                ? (this.dark ? GlassTokens.BORDER_DARK : GlassTokens.BORDER_LIGHT)
+                : Color.Transparent })
+              .onClick(() => this.setType(idx, 'income'))
+              .hitTestBehavior(HitTestMode.Block)
+          }
+          CategoryPicker({
+            categories: this.getCatsFor(item),
+            selected: item.category,
+            dark: this.dark,
+            onPick: (name: string) => this.setCategory(idx, name)
+          })
+        }
+      }
+      .layoutWeight(1)
                       .alignItems(HorizontalAlign.Start)
                     }
                     .width('100%')
@@ -217,9 +340,13 @@ struct BookkeepingConfirmPage {
                     .borderColor(this.dark ? GlassTokens.BORDER_DARK : GlassTokens.BORDER_LIGHT)
                     .borderWidth(0)
                     .borderRadius(8)
-                    .onClick(() => this.toggleIndex(idx))
+                    .onClick(() => {
+                      if (this.activeCatIdx !== idx) {
+                        this.toggleIndex(idx);
+                      }
+                    })
                   },
-                  (item: Suggestion, idx: number) => idx.toString() + '_' + (this.selected[idx] ? 1 : 0)
+                  (item: Suggestion, idx: number) => idx.toString() + '_' + (this.selected[idx] ? 1 : 0) + '_' + item.type + '_' + item.category
                 )
               }
               .width('100%')

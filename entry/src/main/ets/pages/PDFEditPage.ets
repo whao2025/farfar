@@ -13,6 +13,9 @@ import { saveSandboxFile } from '../utils/PickerSaveUtils';
 import { pickAndCopyPDF } from '../utils/PDFImportUtils';
 import { addEditedFile } from '../utils/ImportLibrary';
 import { PdfEditToolItem } from '../components/PdfEditToolItem';
+import { RewriteSelectDialog } from '../components/RewriteSelectDialog';
+import { RewriteEditDialog } from '../components/RewriteEditDialog';
+import { RewriteUndoDialog, RewriteUndoEntry } from '../components/RewriteUndoDialog';
 import { OCRService, createOCRService } from '../ocr/OCRService';
 import { TextBlock, OCRResult, OCRProgress } from '../ocr/OCRTypes';
 
@@ -42,6 +45,8 @@ struct PDFEditPage {
   @State saving: boolean = false;
   @State statusMsg: string = '';
   @State rewriteBlocks: Array<TextBlockInfo> = [];
+  @State selectedIds: string[] = [];
+  @State batchId: string = '';
   @State activedTool: number = -1;
   @State canUndo: boolean = false;
   @State rewritePanelOpen: boolean = false;
@@ -50,6 +55,17 @@ struct PDFEditPage {
   @State rewritePreviewTick: number = 0;
   @State rewritePreviews: Array<string> = [];
   private rewriteSize: string = '';
+  @State showSelectDialog: boolean = false;
+  @State showEditDialog: boolean = false;
+  @State showUndoDialog: boolean = false;
+  @State editText: string = '';
+  @State editSizeText: string = '';
+  @State editErrorMsg: string = '';
+  @State undoEntries: Array<RewriteUndoEntry> = [];
+  @State undoChecked: boolean[] = [];
+  private undoBatchOps: EditRewriteTextOp[] = [];
+  private undoBatchOpIndexes: number[] = [];
+  private toastTimer: number = -1;
   @State highlightColor: number = 0xFFC300;
   @State highlightWidth: number = 200;
   @State overlayW: number = 0;
@@ -92,6 +108,12 @@ struct PDFEditPage {
       this.canUndo = false;
       return;
     }
+    const last = this.ops[this.ops.length - 1];
+    const lastBatch = last.op === 'rewriteText' ? (last as EditRewriteTextOp).batchId : '';
+    if (lastBatch && lastBatch.length > 0) {
+      this.openBatchUndo(lastBatch);
+      return;
+    }
     const op = this.ops.pop();
     if (op && op.op === 'rewriteText') {
       const idx = this.rewriteBlocks.findIndex((b) => b.index === op.index);
@@ -108,6 +130,83 @@ struct PDFEditPage {
     this.opsCount = this.ops.length;
     this.canUndo = this.ops.length > 0;
     this.selectedOpIndex = -1;
+  }
+
+  private openBatchUndo(batchId: string): void {
+    const idxs: number[] = [];
+    for (let i = 0; i < this.ops.length; i++) {
+      const o = this.ops[i];
+      if (o.op === 'rewriteText' && (o as EditRewriteTextOp).batchId === batchId) {
+        idxs.push(i);
+      }
+    }
+    if (idxs.length === 0) {
+      return;
+    }
+    const entries: Array<RewriteUndoEntry> = [];
+    for (let i = 0; i < idxs.length; i++) {
+      const o = this.ops[idxs[i]] as EditRewriteTextOp;
+      entries.push({
+        page: o.page,
+        newText: o.newText,
+        origText: this.origTextOf(o.index)
+      });
+    }
+    this.undoBatchOpIndexes = idxs;
+    this.undoEntries = entries;
+    this.undoChecked = new Array<boolean>(idxs.length).fill(true);
+    this.showUndoDialog = true;
+  }
+
+  private origTextOf(blockIndex: number): string {
+    const b = this.rewriteBlocks.find((x) => x.index === blockIndex);
+    return b ? b.text : '';
+  }
+
+  private onToggleUndo(idx: number): void {
+    const arr: boolean[] = this.undoChecked.slice();
+    arr[idx] = !arr[idx];
+    this.undoChecked = arr;
+  }
+
+  private onUndoSelectAll(): void {
+    this.undoChecked = new Array<boolean>(this.undoEntries.length).fill(true);
+  }
+
+  private onUndoSelectNone(): void {
+    this.undoChecked = new Array<boolean>(this.undoEntries.length).fill(false);
+  }
+
+  private onUndoCancel(): void {
+    this.showUndoDialog = false;
+  }
+
+  private onUndoConfirm(): void {
+    const remove: number[] = [];
+    for (let i = 0; i < this.undoChecked.length; i++) {
+      if (this.undoChecked[i] && i < this.undoBatchOpIndexes.length) {
+        remove.push(this.undoBatchOpIndexes[i]);
+      }
+    }
+    remove.sort((a: number, b: number) => b - a);
+    for (let i = 0; i < remove.length; i++) {
+      const o = this.ops[remove[i]];
+      if (o && o.op === 'rewriteText') {
+        const idx = this.rewriteBlocks.findIndex((b) => b.index === o.index);
+        if (idx >= 0 && idx < this.rewritePreviews.length) {
+          const arr: Array<string> = this.rewritePreviews.slice();
+          arr[idx] = '';
+          this.rewritePreviews = arr;
+        }
+      }
+      this.ops.splice(remove[i], 1);
+    }
+    this.rewritePreviewTick = this.rewritePreviewTick + 1;
+    this.showUndoDialog = false;
+    this.opsCount = this.ops.length;
+    this.canUndo = this.ops.length > 0;
+    this.selectedOpIndex = -1;
+    this.statusMsg = `已撤回 ${remove.length} 处改字修改`;
   }
 
   aboutToAppear(): void {
@@ -162,7 +261,23 @@ struct PDFEditPage {
     });
     this.controller.registerPageChangedListener((pageIndex: number) => {
       this.currentPage = pageIndex;
+      this.onPageChangedForRewrite();
     });
+  }
+
+  private onPageChangedForRewrite(): void {
+    if (this.activedTool === 4) {
+      this.activedTool = -1;
+      this.showSelectDialog = false;
+      this.showEditDialog = false;
+      this.showUndoDialog = false;
+      this.selectedIds = [];
+      this.rewritePanelOpen = false;
+      this.rewriteSelected = -1;
+      this.rewritePreviews = [];
+      this.rewriteBlocks = [];
+      this.rewriteAsync();
+    }
   }
 
   private showToast(msg: string): void {
@@ -171,6 +286,21 @@ struct PDFEditPage {
     } catch (err) {
       console.error('showToast failed:', JSON.stringify(err));
     }
+  }
+
+  private showRewriteError(msg: string): void {
+    this.toastDebounced('改字错误：' + msg);
+  }
+
+  private toastDebounced(msg: string): void {
+    if (this.toastTimer >= 0) {
+      return;
+    }
+    this.toastTimer = 1;
+    this.showToast(msg);
+    setTimeout(() => {
+      this.toastTimer = -1;
+    }, 300);
   }
 
   private dialogInput: string = '';
@@ -382,7 +512,7 @@ struct PDFEditPage {
     const block = this.rewriteBlocks[this.rewriteSelected];
     const newText = this.rewriteInput.trim();
     if (!newText) {
-      this.showToast('请输入文字内容');
+      this.showRewriteError('请输入文字内容');
       return;
     }
     let newSize = block.size;
@@ -1058,6 +1188,10 @@ struct PDFEditPage {
       this.rewriteBlocks = [];
       this.rewriteSelected = -1;
       this.rewritePanelOpen = false;
+      this.showSelectDialog = false;
+      this.showEditDialog = false;
+      this.showUndoDialog = false;
+      this.selectedIds = [];
       return;
     }
     this.activedTool = 4;
@@ -1066,35 +1200,164 @@ struct PDFEditPage {
     this.rewriteInput = '';
     this.rewriteSize = '';
     this.rewriteSizeExpanded = false;
+    this.showSelectDialog = false;
+    this.showEditDialog = false;
+    this.showUndoDialog = false;
+    this.selectedIds = [];
     this.rewriteAsync();
   }
 
   private async rewriteAsync(): Promise<void> {
     if (!this.filePath) {
       this.activedTool = -1;
-      this.showToast('请先打开一个 PDF 文件');
+      this.showRewriteError('请先打开一个 PDF 文件');
       return;
     }
     try {
       const result: TextObjectResult = await listTextObjectsAsync(this.filePath, this.currentPage);
       if (!result.ok) {
         this.activedTool = -1;
-        this.showToast('读取文本块失败（文件可能已损坏）');
+        this.showRewriteError('读取文本块失败（文件可能已损坏）');
         return;
       }
       if (result.blocks.length === 0) {
         this.activedTool = -1;
-        this.showToast('此页无文本或为扫描版，无法修改');
+        this.showRewriteError('此页无文本或为扫描版，无法修改');
         return;
       }
       this.rewriteBlocks = result.blocks;
       this.rewritePreviews = new Array<string>(result.blocks.length);
-      this.statusMsg = `共 ${result.blocks.length} 个文本块，点击页面文字即可修改`;
+      this.selectedIds = [];
+      this.statusMsg = `共 ${result.blocks.length} 个文本块，请选择要修改的文字`;
+      if (this.activedTool === 4) {
+        this.showSelectDialog = true;
+      }
     } catch (err) {
       this.activedTool = -1;
       console.error('list text blocks failed', JSON.stringify(err));
-      this.showToast('解析文本块异常，请重试');
+      this.showRewriteError('解析文本块异常，请重试');
     }
+  }
+
+  private onToggleBlock(id: string): void {
+    const idx = this.selectedIds.indexOf(id);
+    if (idx >= 0) {
+      const arr: string[] = this.selectedIds.slice();
+      arr.splice(idx, 1);
+      this.selectedIds = arr;
+    } else {
+      const arr: string[] = this.selectedIds.slice();
+      arr.push(id);
+      this.selectedIds = arr;
+    }
+  }
+
+  private onSelectAll(): void {
+    const arr: string[] = [];
+    for (let i = 0; i < this.rewriteBlocks.length; i++) {
+      arr.push(this.rewriteBlocks[i].id);
+    }
+    this.selectedIds = arr;
+  }
+
+  private onSelectNone(): void {
+    this.selectedIds = [];
+  }
+
+  private onSelectConfirm(): void {
+    if (this.selectedIds.length === 0) {
+      this.showRewriteError('请至少选择一个文本块');
+      return;
+    }
+    this.showSelectDialog = false;
+    this.prepareEditDialog();
+  }
+
+  private onSelectCancel(): void {
+    this.showSelectDialog = false;
+  }
+
+  private firstSelectedBlock(): TextBlockInfo | null {
+    if (this.selectedIds.length === 0 || this.rewriteBlocks.length === 0) {
+      return null;
+    }
+    const firstId = this.selectedIds[0];
+    for (let i = 0; i < this.rewriteBlocks.length; i++) {
+      if (this.rewriteBlocks[i].id === firstId) {
+        return this.rewriteBlocks[i];
+      }
+    }
+    return null;
+  }
+
+  private prepareEditDialog(): void {
+    const first = this.firstSelectedBlock();
+    if (!first) {
+      return;
+    }
+    this.editText = first.text;
+    this.editSizeText = `${first.size}`;
+    this.editErrorMsg = '';
+    this.showEditDialog = true;
+  }
+
+  private onEditCancel(): void {
+    this.showEditDialog = false;
+  }
+
+  private onEditConfirm(): void {
+    const newText = this.editText.trim();
+    if (!newText) {
+      this.editErrorMsg = '改字错误：请输入新的文字内容';
+      return;
+    }
+    let newSize = 0;
+    if (this.editSizeText.trim().length === 0) {
+      newSize = 0;
+    } else {
+      const parsed = parseInt(this.editSizeText, 10);
+      if (isNaN(parsed) || parsed <= 0) {
+        this.editErrorMsg = '改字错误：字号必须为正整数';
+        return;
+      }
+      newSize = parsed;
+    }
+    this.applyBatchRewrite(newText, newSize);
+  }
+
+  private applyBatchRewrite(newText: string, newSize: number): void {
+    const batch = 'b' + Date.now().toString();
+    this.batchId = batch;
+    const blocks: Array<TextBlockInfo> = [];
+    for (let i = 0; i < this.rewriteBlocks.length; i++) {
+      if (this.selectedIds.indexOf(this.rewriteBlocks[i].id) >= 0) {
+        blocks.push(this.rewriteBlocks[i]);
+      }
+    }
+    for (let i = 0; i < blocks.length; i++) {
+      const block = blocks[i];
+      const op: EditRewriteTextOp = {
+        op: 'rewriteText',
+        page: this.currentPage,
+        index: block.index,
+        newText: newText,
+        newSize: newSize > 0 ? newSize : block.size,
+        batchId: batch
+      };
+      this.pushOp(op);
+    }
+    const previews: Array<string> = this.rewritePreviews.slice();
+    for (let i = 0; i < blocks.length; i++) {
+      const bi = this.rewriteBlocks.findIndex((b) => b.id === blocks[i].id);
+      if (bi >= 0 && bi < previews.length) {
+        previews[bi] = newText;
+      }
+    }
+    this.rewritePreviews = previews;
+    this.rewritePreviewTick = this.rewritePreviewTick + 1;
+    this.showEditDialog = false;
+    this.selectedIds = [];
+    this.statusMsg = `已批量修改 ${blocks.length} 处文字（保存后生效）`;
   }
 
   private onRewriteBlockTap(x: number, y: number): void {
@@ -1112,7 +1375,7 @@ struct PDFEditPage {
       }
     }
     if (hit < 0) {
-      this.showToast('未命中文本块，请点击文字区域');
+      this.showRewriteError('未命中文本块，请点击文字区域');
       return;
     }
     this.rewriteSelected = hit;
@@ -1302,9 +1565,46 @@ struct PDFEditPage {
               Stack() {
                 ForEach(this.rewriteBlocks, (block: TextBlockInfo, idx: number) => {
                   this.rewriteBlockBox(block, idx)
-                }, (block: TextBlockInfo, idx: number) => block.index.toString())
+                }, (block: TextBlockInfo, idx: number) => block.id)
                 if (this.rewritePanelOpen) {
                   this.rewriteEditPanel()
+                }
+                if (this.showSelectDialog) {
+                  RewriteSelectDialog({
+                    blocks: this.rewriteBlocks,
+                    selectedIds: this.selectedIds,
+                    dark: this.dark,
+                    onToggle: (id: string) => this.onToggleBlock(id),
+                    onSelectAll: () => this.onSelectAll(),
+                    onSelectNone: () => this.onSelectNone(),
+                    onConfirm: () => this.onSelectConfirm(),
+                    onCancel: () => this.onSelectCancel()
+                  })
+                }
+                if (this.showEditDialog) {
+                  RewriteEditDialog({
+                    block: this.firstSelectedBlock(),
+                    text: this.editText,
+                    sizeText: this.editSizeText,
+                    dark: this.dark,
+                    errorMsg: this.editErrorMsg,
+                    onTextChange: (v: string) => { this.editText = v; },
+                    onEditSizeChange: (v: string) => { this.editSizeText = v; },
+                    onConfirm: () => this.onEditConfirm(),
+                    onCancel: () => this.onEditCancel()
+                  })
+                }
+                if (this.showUndoDialog) {
+                  RewriteUndoDialog({
+                    entries: this.undoEntries,
+                    selected: this.undoChecked,
+                    dark: this.dark,
+                    onToggle: (idx: number) => this.onToggleUndo(idx),
+                    onSelectAll: () => this.onUndoSelectAll(),
+                    onSelectNone: () => this.onUndoSelectNone(),
+                    onConfirm: () => this.onUndoConfirm(),
+                    onCancel: () => this.onUndoCancel()
+                  })
                 }
               }
               .width('100%')
@@ -1316,7 +1616,7 @@ struct PDFEditPage {
                 this.overlayH = Number(newArea.height);
               })
               .onTouch((event: TouchEvent) => {
-                if (this.rewritePanelOpen) {
+                if (this.rewritePanelOpen || this.showSelectDialog || this.showEditDialog || this.showUndoDialog) {
                   return;
                 }
                 this.onOverlayTouch(event);

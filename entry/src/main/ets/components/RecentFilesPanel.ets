@@ -1,7 +1,7 @@
 import { GlassTokens } from '../theme/GlassTokens';
-import { ImportFileItem, loadRecentFiles, toggleStar, toggleStarPin, pinStarBatch, moveToTop, deleteImport, deleteImports, moveToTopBatch, formatRelativeTime } from '../utils/ImportLibrary';
+import { GlassButton } from './GlassButton';
+import { ImportFileItem, loadRecentFiles, toggleStar, pinStarBatch, deleteImports, moveToTopBatch, formatRelativeTime } from '../utils/ImportLibrary';
 import { common } from '@kit.AbilityKit';
-import { ShowDialogSuccessResponse } from '@kit.ArkUI';
 
 @Component
 export struct RecentFilesPanel {
@@ -14,6 +14,10 @@ export struct RecentFilesPanel {
   @State selectedPaths: Array<string> = [];
   @State recentFiles: Array<ImportFileItem> = [];
   @State expanded: boolean = false;
+  @State confirmDialogId: number = -1;
+  @State confirmTitle: string = '';
+  @State confirmMessage: string = '';
+  private pendingConfirm: () => void = () => {};
 
   aboutToAppear(): void {
     this.load();
@@ -100,56 +104,68 @@ export struct RecentFilesPanel {
     }
   }
 
-  private async onMoveToTop(item: ImportFileItem): Promise<void> {
+  private openConfirmDialog(title: string, message: string, onConfirm: () => void): void {
+    this.confirmTitle = title;
+    this.confirmMessage = message;
+    this.pendingConfirm = onConfirm;
     const uiContext = this.getUIContext();
-    const host = uiContext.getHostContext();
-    if (!host) {
-      return;
-    }
-    const ctx = host as common.Context;
-    let updated: Array<ImportFileItem>;
-    if (this.filterMode === 'starred') {
-      updated = await toggleStarPin(ctx, item.name);
-    } else {
-      updated = await moveToTop(ctx, item.name);
-    }
-    this.recentFiles = updated.slice();
+    uiContext.getPromptAction().openCustomDialog({
+      builder: () => {
+        this.confirmDialog()
+      },
+      autoCancel: true
+    }).then((id: number) => {
+      this.confirmDialogId = id;
+    }).catch(() => {
+      console.error('open confirm dialog failed');
+    });
   }
 
-  private onEditItem(item: ImportFileItem): void {
-    try {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/PDFEditPage', params: { filePath: item.path } });
-    } catch (err) {
-      console.error('onEditItem pushUrl failed:', JSON.stringify(err));
-    }
-  }
-
-  private async onDeleteItem(item: ImportFileItem): Promise<void> {
-    const uiContext = this.getUIContext();
-    const host = uiContext.getHostContext();
-    if (!host) {
-      return;
-    }
-    const ctx = host as common.Context;
-    try {
-      const resp = await uiContext.getPromptAction().showDialog({
-        title: '删除文件',
-        message: `确定删除「${item.name}」？此操作不可恢复。`,
-        buttons: [
-          { text: '取消', color: '#8A8A96' },
-          { text: '删除', color: '#FF453A' }
-        ]
-      });
-      const result = resp as ShowDialogSuccessResponse;
-      if (result.index !== 1) {
-        return;
+  private closeConfirmDialog(): void {
+    if (this.confirmDialogId >= 0) {
+      try {
+        this.getUIContext().getPromptAction().closeCustomDialog(this.confirmDialogId);
+      } catch (e) {
+        console.error('close confirm dialog failed:', JSON.stringify(e));
       }
-      const updated = await deleteImport(ctx, item.name);
-      this.recentFiles = updated.slice();
-      uiContext.getPromptAction().showToast({ message: '已删除' });
-    } catch (e) {
-      console.error('delete item failed', JSON.stringify(e));
+      this.confirmDialogId = -1;
     }
+  }
+
+  @Builder
+  confirmDialog() {
+    Column({ space: 14 }) {
+      Text(this.confirmTitle)
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
+      Text(this.confirmMessage)
+        .fontSize(13)
+        .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
+        .textAlign(TextAlign.Center)
+        .maxLines(3)
+      Row({ space: 12 }) {
+        GlassButton({
+          label: '取消', dark: this.dark, heightVp: 40, fontSize: 14, widthVp: 108,
+          onClickHandler: () => this.closeConfirmDialog()
+        })
+        GlassButton({
+          label: '删除', dark: this.dark, heightVp: 40, fontSize: 14, widthVp: 108,
+          onClickHandler: () => {
+            const fn = this.pendingConfirm;
+            this.closeConfirmDialog();
+            fn();
+          }
+        })
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.Center)
+    }
+    .padding(24)
+    .backgroundBlurStyle(GlassTokens.BLUR_MODAL)
+    .backgroundColor(this.dark ? GlassTokens.BG_DARK : GlassTokens.BG_LIGHT)
+    .borderRadius(20)
+    .border({ width: 1, color: this.dark ? GlassTokens.BORDER_DARK : GlassTokens.BORDER_LIGHT })
   }
 
   private isSelected(path: string): boolean {
@@ -230,18 +246,17 @@ export struct RecentFilesPanel {
       return;
     }
     try {
-      const resp = await uiContext.getPromptAction().showDialog({
-        title: '批量删除',
-        message: `确定删除选中的 ${names.length} 个文件？此操作不可恢复。`,
-        buttons: [
-          { text: '取消', color: '#8A8A96' },
-          { text: '删除', color: '#FF453A' }
-        ]
+      this.openConfirmDialog('批量删除', `确定删除选中的 ${names.length} 个文件？此操作不可恢复。`, () => {
+        this.doBatchDelete(ctx, names);
       });
-      const result = resp as ShowDialogSuccessResponse;
-      if (result.index !== 1) {
-        return;
-      }
+    } catch (e) {
+      console.error('batch delete failed', JSON.stringify(e));
+    }
+  }
+
+  private async doBatchDelete(ctx: common.Context, names: string[]): Promise<void> {
+    const uiContext = this.getUIContext();
+    try {
       const updated = await deleteImports(ctx, names);
       this.recentFiles = updated.slice();
       this.bumpRefresh();
@@ -258,57 +273,6 @@ export struct RecentFilesPanel {
   private bumpRefresh(): void {
     const tick = (AppStorage.get<number>('recentRefreshTick') ?? 0) as number;
     AppStorage.setOrCreate('recentRefreshTick', tick + 1);
-  }
-
-  @Builder
-  swipeMenu(item: ImportFileItem) {
-    Row({ space: 12 }) {
-      Button({ type: ButtonType.Circle, stateEffect: true }) {
-        SymbolGlyph($r('sys.symbol.arrow_up'))
-          .fontSize(20)
-          .fontColor([Color.White])
-          .fontWeight(FontWeight.Bold)
-      }
-      .width(44)
-      .height(44)
-      .backgroundColor('#4C9AFF')
-      .margin({ top: 8, bottom: 8 })
-      .onClick(() => {
-        this.onMoveToTop(item);
-      })
-
-      Button({ type: ButtonType.Circle, stateEffect: true }) {
-        SymbolGlyph($r('sys.symbol.pencil_line'))
-          .fontSize(20)
-          .fontColor([Color.White])
-          .fontWeight(FontWeight.Bold)
-      }
-      .width(44)
-      .height(44)
-      .backgroundColor('#34C759')
-      .margin({ top: 8, bottom: 8 })
-      .onClick(() => {
-        this.onEditItem(item);
-      })
-
-      Button({ type: ButtonType.Circle, stateEffect: true }) {
-        SymbolGlyph($r('sys.symbol.trash'))
-          .fontSize(20)
-          .fontColor([Color.White])
-          .fontWeight(FontWeight.Bold)
-      }
-      .width(44)
-      .height(44)
-      .backgroundColor('#FF453A')
-      .margin({ top: 8, bottom: 8 })
-      .onClick(() => {
-        this.onDeleteItem(item);
-      })
-    }
-    .height('100%')
-    .padding({ left: 12, right: 12 })
-    .alignItems(VerticalAlign.Center)
-    .justifyContent(FlexAlign.End)
   }
 
   @Builder
@@ -384,7 +348,7 @@ export struct RecentFilesPanel {
     .backgroundBlurStyle(GlassTokens.BLUR_PANEL)
     .backgroundColor(this.dark ? GlassTokens.BG_DARK : GlassTokens.BG_LIGHT)
     .borderRadius(16)
-    .margin({ bottom: 130 })
+    .margin({ bottom: 16 })
   }
 
   build() {
@@ -468,31 +432,33 @@ export struct RecentFilesPanel {
                 })
               )
             }
-            .swipeAction(this.selectModeActive ? undefined : {
-              end: () => {
-                this.swipeMenu(item)
-              },
-              edgeEffect: SwipeEdgeEffect.Spring
-            })
           }, (item: ImportFileItem) => item.path + '_' + item.star)
         }
         .width('100%')
         .layoutWeight(1)
-        .padding({ bottom: this.selectModeActive ? 0 : 130 })
+        .padding({ bottom: this.selectModeActive ? 0 : 16 })
 
         if (this.shouldShowExpand()) {
           Row() {
-            Text(this.expanded ? '收起' : `展开全部 (${this.getVisibleFiles().length})`)
-              .fontSize(13)
-              .fontColor(this.dark ? '#8A8A96' : '#8A8A96')
-              .padding({ top: 8, bottom: 8 })
-              .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.98 })
-              .onClick(() => {
-                this.expanded = !this.expanded;
-              })
+            Row() {
+              Text(this.expanded ? '收起' : `展开全部 (${this.getVisibleFiles().length})`)
+                .fontSize(13)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(GlassTokens.TEXT_DARK)
+                .padding({ left: 18, right: 18, top: 7, bottom: 7 })
+            }
+            .backgroundColor(this.dark ? '#454555' : '#3A3A46')
+            .borderRadius(17)
+            .border({ width: 1, color: this.dark ? GlassTokens.BORDER_DARK : 'rgba(255,255,255,0.4)' })
+            .shadow(GlassTokens.SHADOW)
+            .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.98 })
+            .onClick(() => {
+              this.expanded = !this.expanded;
+            })
           }
           .width('100%')
           .justifyContent(FlexAlign.Center)
+          .margin({ bottom: 16 })
         }
 
         if (this.selectModeActive) {

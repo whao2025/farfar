@@ -1,6 +1,7 @@
 import { GlassTokens } from '../theme/GlassTokens';
 import { budgetPrefs } from '../utils/BudgetPreferences';
 import { common } from '@kit.AbilityKit';
+import curves from '@ohos.curves';
 
 @Component
 export struct BudgetCard {
@@ -122,6 +123,7 @@ export struct BudgetCard {
           direction: GradientDirection.Right,
           colors: [[this.paceColor(tone), 0], [GlassTokens.ACCENT, 1]]
         })
+        .animation({ duration: 600, curve: curves.springMotion(0.6, 0.9, 0) })
     }
     .width('100%')
   }
@@ -146,6 +148,7 @@ export struct BudgetCard {
           .height(8)
           .borderRadius(4)
           .backgroundColor(color)
+          .animation({ duration: 600, curve: curves.springMotion(0.6, 0.9, 0) })
       }
       .layoutWeight(1)
 

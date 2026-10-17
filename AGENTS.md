@@ -1,6 +1,6 @@
 # freepdf 项目开发指南
 
-> 本项目为 **纯本地** HarmonyOS NEXT 单机应用（ArkTS / API 23 稳定基线），包名 `com.freepdf.app`，无联网/支付/登录/第三方 SDK。上架勾选"单机 APP"，无需 ICP 备案。项目根为 `D:\freepdf`，分支 master 尚未有提交（一切文件未跟踪）。图标要求 512×512 PNG Alpha 实心。
+> 本项目为 **纯本地** HarmonyOS NEXT 单机应用（ArkTS / API 23 稳定基线），包名 `com.freepdf.app`，无联网/支付/登录/第三方 SDK。上架勾选"单机 APP"，无需 ICP 备案。项目根为 `D:\freepdf`。图标要求 512×512 PNG Alpha 实心。
 > 本文内容已按源码逐一核对修正（深色键 / Splash / RecordDatabase / utils 导出签名 / 组件 props）。
 
 ## 技术栈与关键配置
@@ -11,10 +11,10 @@
 - 系统能力：PDF 用 `@kit.PDFKit`（PdfView、pdfService、pdfViewManager），文件 `@kit.CoreFileKit`（fileIo/picker），图片 `@kit.ImageKit`，相册 `@kit.MediaLibraryKit`（photoAccessHelper），数据库 `@kit.ArkData`（relationalStore / preferences），UI `@kit.ArkUI`（window/display/router），动作 `@kit.AbilityKit`（common），隐私 `@kit.AppGalleryKit`（privacyManager）。
 
 ## 目录结构（entry/src/main/ets）
-- `pages/`：Home、PDFViewer、PDFEditPage、PDFConvertPage、BookkeepingConfirmPage、ProfilePrivacyPage、Splash。
+- `pages/`：Home、PDFViewer、PDFEditPage、PDFConvertPage、BookkeepingConfirmPage、ManualEntryPage、ProfilePrivacyPage、Splash。
 - `pages/tabs/`：底部导航四 tab —— EditTab(编辑)/ConvertTab(转化)/BookkeepingTab(记账)/ProfileTab(我的)。
-- `components/`：7 个 —— GlassButton、GlassToolbar、PdfEditToolItem、RecentFilesPanel、AutoRecordConfirm、BookkeepingSummary、DailyBarChart。（⚠️ **无 GlassPanel**）
-- `utils/`：AmountParser、AutoCategorizer、BudgetPreferences、DarkModeStore、ImportLibrary、PDFConvertUtils、PDFEditUtils、PDFImportUtils、PDFOCRUtils、PickerSaveUtils、RecordDatabase。
+- `components/`：9 个 —— GlassButton、GlassToolbar、PdfEditToolItem、RecentFilesPanel、BudgetCard、TrendCard、SmartReachBar、CategoryPicker、MLOptionsSwitch。（⚠️ **无 GlassPanel、BookkeepingSummary、DailyBarChart、AutoRecordConfirm**）
+- `utils/`：AmountParser、AutoCategorizer、AutoCategorizerTypes、RuleCategorizer、BudgetPreferences、DarkModeStore、ImportLibrary、PDFConvertUtils、PDFEditUtils、PDFImportUtils、PDFOCRUtils、PickerSaveUtils、RecordDatabase、OcrLock、BookOcr、DatasetExportUtil、ml/BillClassifier。
 - `ocr/`：OCR 服务抽象层 —— `OCRTypes.ets`（OCRResult/OCRPage/TextBlock/TextLine/OCRProgress/OCROptions）、`OCRService.ets`（接口 `recognize(pdfPath,options?,onProgress?)` + `configure(context?)` + 工厂 `createOCRService()`）、`CoreVisionOCR.ets`（`@kit.CoreVisionKit` textRecognition 逐页识别，进度回调/失败重试 MAX_RETRY=2/finally release，块坐标转 PDF 左下原点，fontSize/confidence 为占位默认）。⚠️ CoreVisionOCR 的 TextBlock.fontSize 恒 12、confidence 恒 1（SDK 该版本无这些字段，接口已预留）。磁盘缓存：`configure(ctx)` 后按 `filesDir/ocr_cache/<size>_<mtime>_p<start>-<end>.json` 缓存/命中（无 crypto，用 stat size+mtime 指纹）。⚠️ 不做 taskpool 并发——textRecognition 全局单例 + worker 上下文未验证。
 - `pdf/`：PDF 文本回写抽象层 —— `PDFRewriter.ets`（接口 `rewrite(src,out,edits)` + `TextEdit{pageIndex,blockIndex,newText,newSize}` + `RewriteResult`）、`PdfServiceRewriter.ets`（@Concurrent worker：getGraphicsObjects 按序定位第 blockIndex 个 TEXT 对象 → deleteGraphicsObject → 复用 fontInfo 或 'HarmonyOS Sans' 重插 → saveDocument，finally releaseDocument；工厂 `createPDFRewriter()`）。
 - `layout/`：智能排版引擎（纯函数、无副作用、字体匹配结果缓存）—— `FontMatcher.ets`（`FontMatchResult{fontName,fontPath?,similarity,fallback}` + `matchFont(ocrFontName?)`：精确→Levenshtein 模糊(≥0.6)→视觉特征(serif/mono/bold 关键词)→回退 'HarmonyOS Sans'；`FontCache` Map 上限 64 条、满即清）、`ParagraphReconstructor.ets`（`Paragraph{id,text,x,y,width,height,fontSize,fontName?,confidence,blockIds}` + `reconstruct(blocks)`：按 y/x 排序→同行合并(重叠≥0.3 且纵向邻近)→行内按 x 排序+gap 判空格→段几何/平均置信度）、`LayoutEngine.ets`（`LayoutResult{paragraphs,tables,images,pageWidth,pageHeight}` + `reconstructLayout(page)` 纯函数；`matchFonts(page)` 返回 `FontMapEntry[]`；`detectTables` 按 y 行分组+≥3 行+≥2 列；`detectImages` 面积>均值6倍 判图）。
@@ -34,6 +34,7 @@
 | `userDarkModeOverride` | EntryAbility | DarkModeEnvCallback / 深色同步 | true 时忽略系统跟随 |
 | `fileFilterMode` | EntryAbility、tabs/EditTab | Edit/Convert 面板 | 'all'：全部/星标过滤 |
 | `recentRefreshTick` | Edit 各保存链 bump | RecentDocsPanel `@Watch` | 驱动最近文档刷新 |
+| `recordRefreshTick` | ConfirmPage 保存链/ManualEntry 落库 bump | BookkeepingTab `@Watch` | 驱动记账统计刷新 |
 | `windowWidth` | EntryAbility | — | 窗口宽 px |
 | `breakpoint` | EntryAbility | 自适应 | 'sm'/'md'/'lg'（Breakpoint） |
 | `foldStatus` | EntryAbility（display.on） | — | 折叠屏状态 |
@@ -42,7 +43,7 @@
 
 ## 底部导航与路由
 - 四 tab（编辑/转化/记账/我的）。编辑 tab 三入口（首页/新建/打开）；转化 tab：PDF转图/图转PDF/PDF转txt/PDF转记账（`pdfToCredit` 4 种 mode）。
-- 页面注册：`resources/base/profile/main_pages.json`（Home/PDFViewer/PDFEditPage/PDFConvertPage/BookkeepingConfirmPage/ProfilePrivacyPage/Splash）。
+- 页面注册：`resources/base/profile/main_pages.json`（Splash/Home/PDFViewer/PDFEditPage/PDFConvertPage/BookkeepingConfirmPage/ManualEntryPage/ProfilePrivacyPage）。
 - 跳转：`this.getUIContext().getRouter().pushUrl({url, params})` / `back()` / `back(-1)`。Splash 用 `router.replaceUrl('pages/Home')`。
 - 页面 params：
   - `PDFViewerParams { filePath?: string }`
@@ -51,15 +52,18 @@
   - `ConfirmPageParams { source?: string; text?: string; mode?: 'full'|'compact' }`
 
 ## 记账功能（Bookkeeping）— 本地规则驱动
-流程：BookkeepingTab → BookkeepingConfirmPage.parseText() → `AutoCategorizer.categorizeBatch(text,'pdf-text')` → `AmountParser.parse` → 正则 + 关键词分类 → 用户确认 → 落 `recordDb`（relationalStore RDB）。
+流程：BookkeepingTab(三入口：SmartReachBar 记账球→ManualEntryPage / PDF球→PDFConvertPage pdfToCredit / 图库球→BookOcr 选图或拍摄→OCR) → BookkeepingConfirmPage.parseText() → `AutoCategorizer.categorizeBatch(text, source)` → `AmountParser.parse` → 正则 + 关键词分类（+ML enhance 可选）→ 用户确认 → 落 `recordDb`（relationalStore RDB）。
 - `model/RecordModel.ets`：
   - `enum RecordStatus {PENDING=0,CONFIRMED=1,DELETED=2}`
-  - `type RecordType='expense'|'income'`、`type RecordSource='pdf-text'|'pdf-ocr'`、`type BudgetType`
+  - `type RecordType='expense'|'income'`、`type RecordSource='pdf-text'|'pdf-ocr'|'img-ocr'`、`type BudgetType`
   - 接口 `CategoryInfo{name,keywords,icon}`、`BookkeepingRecord{id:number|null, amount, type, category, note, merchant:string|null, timestamp, dateStr, confidence, source, status, createdAt}`、`ParsedAmount{amount,type:'expense'|'income'|'refund',category,confidence}`、`Suggestion extends ParsedAmount{note, merchant?, date?, timestamp?, source}`、`WeekDaySpending{day,dateStr,amount,isToday}`、`BudgetConfig{daily,weekly,monthly}`
   - 常量 `EXPENSE_CATEGORIES`(8)/`INCOME_CATEGORIES`(3)/`REFUND_KEYWORDS`/`TOTAL_LABELS`
+  - ⚠️ **规则单一事实源 = rawfile `ml/record_model.json`**：分类/商户/黑名单/结算词全量在此，`EntryAbility` 启动 `ensureRuleDataLoaded` 幂等加载并替换对应 `export let`（加载失败保留内置默认）。词表增删改后跑 `node scripts/verify_parser.js`（结构+最长命中 fixture+icon 参考校验）。⚠️ 分裂：`amount` 识别正则仍在 AmountParser，规则词只影响分类。
+  - ⚠️ **图片记账（'img-ocr'）强制启用端侧 ML 分类**：`BookkeepingConfirmPage` 对 `source==='img-ocr'` 无条件调 `ensureMlForImg`（先同步挂 enhance 再后台补载模型，不受 mlOptions 开关约束）；PDF/文本记账仍走开关语义。
 - utils 三件套：
-  - `AmountParser`（静态类）：`parseLine(line):ParsedAmount|null`、`parse(text,source='pdf-text'):Suggestion[]`、`parseAmountOnly(text):number|null`、`isRefund(text)`、`getCategoryFromText(text)`；内部 `TOTAL_LABELS` 正则、`normalizeAmount`（识别 `[-￥]?\d+([.,]\d+)?`，金额 <99999、上限基准）、`classify`（关键词→EXPENSE/INCOME）、`calculateConfidence`、`extractMerchant`、`dateToTimestamp`。
-  - `AutoCategorizer`（静态类）：`getCategories():CategoryInfo[]`、`categorizeBatch(text,source):Promise<CategorizationResult>`、`validateSuggestion`、`filterValid(suggestions)`、`getSuggestionsForEdit(text)`；内部 `buildSummary`（按类汇总）、`loadMerchantMap`。导出 `autoCategorizer`。
+  - `AmountParser`（静态类）：`parseLine(line):ParsedAmount|null`、`parse(text,source='pdf-text'):Suggestion[]`、`parseAmountOnly(text):number|null`、`isRefund(text)`、`getCategoryFromText(text)`；内部 `TOTAL_LABELS` 正则、`normalizeAmount`（识别 `[-￥]?\d+([.,]\d+)?`，金额 <99999、上限基准）、`classify`（关键词→EXPENSE/INCOME）、`calculateConfidence`、`extractMerchant`、`dateToTimestamp`、`findFallbackMoney`（粘连文本兜底：剔除日期/电话后 matchAll 金额）。
+  - `AutoCategorizer`（静态门面，委托 RuleCategorizer）：`setEnhance(fn)`、`getCategories():CategoryInfo[]`、`categorizeBatch(text,source):Promise<CategorizationResult>`、`validateSuggestion`、`filterValid(suggestions)`、`getSuggestionsForEdit(text)`。⚠️ **无 `autoCategorizer` 导出**。`RuleCategorizer` 持静态 `enhance` 钩子（默认 null）与 `mlEnhance`（conf≥0.6 覆盖，否则规则兜底）+ `loadMerchantMap`（18 商户映射）。
+  - `OcrLock.runOcrSession`（Promise 链互斥，所有 textRecognition 调用必须包入）；`BookOcr`：`pickImagesToSandbox(ctx,max)`（PhotoViewPicker 多选 + `isPhotoTakingSupported=true` 图库内嵌拍摄，uri 拷沙盒）+ `ocrImagesToText(paths)`（放大2倍+原图双识别并集，`recognizeOnce` 按 blocks→lines→value 逐行抽取保行保序供 AmountParser 按行解析，blocks 空回退 res.value）。
   - `CategorizationResult{suggestions,summary}`。
   - `RecordDatabase`：单例 `recordDb = RecordDatabase.getInstance()`。方法 `init(ctx)`、`insert(record)`、`batchInsert(records)`、`getAll(status?)`、`getByDateRange(start,end)`、`getByCategory`、`getWeeklyStats`、`getMonthlyStats`、`update`、`updateStatus`、`delete`、`clearAll`、`close`。⚠️ **无 `insertData`/`updateData`**。
 - `BudgetPreferences`：单例 `budgetPrefs`；`init/getMonthlyBudget/setMonthlyBudget/getBudgetConfig（daily=monthly/30, weekly=monthly/(30/7), monthly）`.getDailyBudget/getWeeklyBudget/isFirstLaunch/setLaunched/close`；prefs `freepdf_budget_prefs` 键 `monthly_budget`/`launched_before`。
@@ -87,9 +91,10 @@
 - **GlassToolbar**：`@Prop dark`、`@Prop heightVp`(64)、`@BuilderParam content`（自定 children）。具名导出。
 - **PdfEditToolItem**：`@Prop label`、`@Prop icon`(Resource)、`@Prop actived`、`@Prop dark`、`onClickHandler`。紧凑尺寸：圆形按钮 36、图标 fontSize 20、标签 10、列宽 56、标签带 `textOverflow(Ellipsis)`。active 用 `sys.color.comp_background_tertiary`。具名导出。
 - **RecentFilesPanel**：`@Prop searchMode`、`@Prop keyword`、`@StorageProp('fileFilterMode')@Watch filterMode`、`@StorageProp('darkMode') dark`、`@StorageProp('recentRefreshTick')@Watch refreshTick`、`@Link selectModeActive`。具名导出。⚠️ 折叠卡 + 星标独立置顶：`getVisibleShown()`（默认前 4 项，`@State expanded` 展开/收起，>4 项且非选择模式显示「展开全部 (N)/收起」）；`getVisibleFiles()` 在 `starred` 模式按 `starPinTime` 置顶前（新→旧）+ 非置顶按 `time` 倒序；置顶分派：starred→`toggleStarPin`/`pinStarBatch`，all→`moveToTop`/`moveToTopBatch`；选择模式自动展开。
-- **AutoRecordConfirm**：`@Prop suggestions: Suggestion[]`、`@Event saveRecords`/`closeDialog`。具名导出。（⚠️ **当前源码零引用，仅供未来逐条确认流程复用**，勿强行接入；如弃用可直接删。）
-- **BookkeepingSummary**：具名导出（`export struct`）；自管 `@State dailyBudget/weeklyBudget/monthlyBudget/actualDaily/actualWeekly/actualMonthly` 画三重环形。
-- **DailyBarChart**：具名导出（`export struct`）无 props，`@State weekData: WeekDaySpending[]` 内部查 db；` @State isLoading/totalExpense`。
+- **SmartReachBar**：`@Prop dark`、`onManual`/`onPdfAuto`/`onImageImport`/`onReachDragStart`/`onReachDragMove(dx)`/`onReachDragEnd`。三球：记账(wallet 黛青)/PDF(doc_text 藤黄)/图库(picture_fill 靛紫)，`Ball(label,icon,color,onTap)`，40.8vp 球、整壳拖拽 PanGesture。具名导出。
+- **BudgetCard**：`@Prop monthlyBudget/dailyBudget/weeklyBudget/actualDaily/actualWeekly/actualMonthly/dark`、`onBudgetSaved`。具名导出。
+- **TrendCard**：`@Prop weekData: WeekDaySpending[]/categoryStats/dailyBudget/monthlyExpense/lastMonthExpense/weekTotal/dark`。具名导出。
+- **CategoryPicker** / **MLOptionsSwitch**：具名导出（MLOptionsSwitch 导出单例 `mlOptions`，prefs `freepdf_ml_prefs`/`ml_classification_enabled`）。
 
 ### theme/GlassTokens.ets（导出类，静态只读）
 - `BLUR_BUTTON` 等 `BlurStyle` 层级、`BLUR_TOOLBAR`、`BLUR_PANEL`、`BLUR_MODAL` 常量。
@@ -99,11 +104,11 @@
 - `SM=600`/`MD=840` 断点。方法 `static calcFromPx(px, density): 'sm'|'md'|'lg'`（≥MD→lg、≥SM→md、否则 sm）。供 EntryAbility → `AppStorage('breakpoint')`，tabs 用 `@StorageProp('breakpoint')`。
 
 ## 页面职责注意
-- `Home.ets`：底部四 tab 总容器（无 params）。底部用原生 `Tabs` 悬浮玻璃底栏：`barOverlap(true)` + `barBackgroundBlurStyle(GlassTokens.BLUR_PANEL)` + `barMode(BarMode.Fixed)`，controller 复用 `HdsTabsController`（`@kit.UIDesignKit`）。⚠️ **勿改回 `HdsTabs` 组件**——本 SDK 工具链 ArkTS 编译器不认 HdsTabs 为 TabContent 容器（10905201），clean 构建实测仍报错，仅其 `HdsTabsController` 可复用。
+- `Home.ets`：底部四 tab 总容器（无 params）。Tabs 隐藏系统 bar（`.barHeight(0)` + `.barBackgroundColor(Color.Transparent)`），由自绘 `capTabBar()` 承担玻璃胶囊底栏（BLUR_PANEL + BG/BORDER + SHADOW + indicator 滑块动画 `indicatorX()`/`indicatorWidth()`）；`capTabItem` 用 `.onClick→tabsController.changeIndex(index)` + `.hitTestBehavior(HitTestMode.Block)`。controller 复用 `HdsTabsController`（`@kit.UIDesignKit`）。⚠️ **勿改回 `HdsTabs` 组件**——本 SDK 工具链 ArkTS 编译器不认 HdsTabs 为 TabContent 容器（10905201），clean 构建实测仍报错，仅其 `HdsTabsController` 可复用。SmartReachBar 三球入口与 motion 握姿订阅（holding 主 + operating 备 + getRecentOperatingHandStatus 校正）均在 Home（`subscribeMotion`，`!this.subscribed` 幂等守卫，aboutToDisappear off 取消），且仅 `currentIndex===2`（记账 tab）渲染三球。
 - **返回键策略**（全局约定）：`PDFConvertPage`、`BookkeepingConfirmPage` 顶部**无返回按钮**（仅居中标题，返回靠系统手势）；`PDFViewer` 顶部仅「编辑」按钮（`widthVp:64` 固定窄宽靠右）；`PDFEditPage` 顶部按钮 label **恒为「撤回」**（有操作撤回、无操作点击返回，不再显示"返回"字样）；`ProfilePrivacyPage` 保留「← 返回」。
 - `EditTab`：搜索 / 选择模式（RecentFilesPanel）、深浅模式。⚠️ 全部/星标切换必须用 `setFilter(mode)`（内部 `AppStorage.setOrCreate('fileFilterMode', mode)`），**勿直接赋值 `this.filterMode`**（@StorageProp 本地赋值不写回 AppStorage → 筛选不生效，曾因此 bug）。
 - `ConvertTab`：`@StorageProp('fileFilterMode')` 过滤聚合，全部/星标显式 `AppStorage.setOrCreate('fileFilterMode', ...)`，Dark。
-- `BookkeepingTab`：init `recordDb`/`budgetPrefs`，算统计，渲染 `BookkeepingSummary`+`DailyBarChart`，「导入 PDF」push `PDFConvertPage {mode:'pdfToCredit'}`。
+- `BookkeepingTab`：init `recordDb`/`budgetPrefs`，算统计，渲染 `BudgetCard`+`TrendCard`。三球入口在 `Home.ets`（记账球 push `ManualEntryPage`、PDF球 push `PDFConvertPage {mode:'pdfToCredit'}`、图库球 `pickImagesToSandbox→ocrImagesToText→push ConfirmPage(source:'img-ocr')`）。
 - `PDFViewer`：PdfController + 监听页数，`filePath` 来自 params。
 - `PDFEditPage`：params `{filePath,newDoc}`；`isNewDoc`；8 工具项；undo stack；保存链。
 - `PDFConvertPage`：params `{mode}`；扫描分发；pdfToCredit→push ConfirmPage。
@@ -116,6 +121,7 @@
 - 深色键 bug 已修（记账系改用 darkMode）。
 - 默认值/export 规范化（default/具名导出已统一为具名）、死代码已清理（`GradientStrokeHelper`/`HelloPathData` 已删）。导出一致性规范：**普通组件用 `export struct X`；@Entry 页面（pages/*.ets 及 Splash）保持 `struct X` 不显式导出**（export struct 配 @Entry 会触发 ACE preview 警告）。
 - 最近文件增强已完成：折叠卡（默认 4 项 + 展开全部）、星标视图独立置顶（`starPinTime`，与全局置顶解耦）、EditTab 星标筛选修复（setFilter 写回 AppStorage）。
+- UI 玻璃化打磨（阶段1-4 已完成，编译 0 警告，详见 `docs/ROADMAP.md`「🎨 UI 玻璃化打磨」）：阶段1 GlassTokens 五档 BlurStyle 对照 SDK 校准、阶段2 BudgetCard/TrendCard 动画增强（`.animation(springMotion)` 隐式动画 + `import curves`；TrendCard 不迁 Canvas）、阶段3 RecentFilesPanel `showDialog`→`openCustomDialog` 玻璃自绘确认框、阶段4 SmartReachBar 三球 `stateStyles` 按压（勿加个体手势）。
 - 官方 DeepSeek 缓存优化：见下方「DeepSeek 前缀缓存 · 命中率诊断与戒律」。
 
 ## 外部 API 调用限制（强制）
@@ -156,6 +162,7 @@
 - **阶段 A（先交付，纯 ArkTS）**：OCR 互斥 + 图库选图记账 + 断点修复：
   - 新增 `utils/OcrLock.ets`：模块级 `runOcrSession<T>(fn)`（Promise 链互斥）——根除 textRecognition 全局单例 double-init/release 崩溃（头号 bug）。
   - 新增 `utils/BookOcr.ets`：`pickImagesToSandbox(ctx,max)`（PhotoViewPicker 多选 + uri 先拷沙盒）+ `ocrImagesToText(paths)`（pixelMap→recognize→release，均在 runOcrSession 内）。
+  - ⚠️ 2026-08-10 落地：`pickImagesToSandbox` 加 `isPhotoTakingSupported=true`（图库页内嵌拍摄，免 CAMERA 权限）；`recognizeOnce` 改 `res.blocks[].lines[].value` 逐行抽取（保行保序，供 AmountParser 按行解析），blocks 空回退 `res.value`——修复图片 OCR 文本粘连导致「不分类/识别不到金额」问题（review 已批，编译 0 警告）。
   - 三处 OCR 收敛进 runOcrSession：`ocr/CoreVisionOCR.ets`(:47,:73)、`utils/PDFOCRUtils.ets`(:49,:73)。
   - 断点修复：`model/RecordModel.ets:9` RecordSource 加 `'img-ocr'`；`utils/AutoCategorizer.ets:29` 放宽；`utils/RecordDatabase.ets:306` cast 加 `'img-ocr'`；`pages/BookkeepingConfirmPage.ets:41` 删三元陷阱直传 RecordSource。
   - 入口：`components/SmartReachBar.ets` 加第三球「图库」+ `pages/tabs/BookkeepingTab.ets` 接选图→OCR→push ConfirmPage(source:'img-ocr')。
@@ -171,3 +178,11 @@
   - 接线：`ProfileTab`(我的→智能分类 Toggle) → `mlOptions`(prefs `freepdf_ml_prefs`/`ml_classification_enabled`) → 开启时 `getBillClassifier().init(ctx)` + `AutoCategorizer.setEnhance(RuleCategorizer.mlEnhance)`（conf≥0.6 才覆盖规则，否则规则兜底）。启动 `loadMlState` 自动恢复接线。隐私政策已声明端侧模型。
 - 交付顺序：A+A+ 一批编译真机验证 → B → C。
 - 本地环境事实：本机 Py3.14.5(`py -3`)、无 torch/mindspore/transformers、GPU RTX 5060 Laptop 8GB(驱动 610.62)、CPU Ryzen 9 8945HX、C 盘剩 167GB。MindSpore 不支持 Py3.14 → 微调用 PyTorch，转换用独立 converter_lite。
+
+## 相机/扫码授权三步法（决策记录，未来相机入口落地时照此实现）
+> 依据 SDK `.d.ts` 实测（2026-08-10）：`@ohos.multimedia.camera.d.ts` 的 `CameraManager.createCameraInput` 明确标 `@permission ohos.permission.CAMERA`；`@kit.AbilityKit` 的 `abilityAccessCtrl.requestPermissionsFromUser` 存在于 `@ohos.abilityAccessCtrl.d.ts`(@since 12)。CAMERA 为 **user_grant**，必须动态申请，否则调用即报错。
+- 静态声明：`module.json5` `requestPermissions` 加 `{"name": "ohos.permission.CAMERA"}`。⚠️ **user_grant 权限**需在 AGC 后台填「权限使用场景说明」。
+- 动态申请：`import { abilityAccessCtrl, common } from '@kit.AbilityKit'; const atManager = abilityAccessCtrl.createAtManager();` + `atManager.requestPermissionsFromUser(context, ['ohos.permission.CAMERA'])`（context 须来自 UIAbility/UI，不可用临时 ctx）。
+- 判断结果：回调 `PermissionRequestResult`，遍历 `authResults`（与权限列表同序），`=== 0` 即 `PERMISSION_GRANTED` 才允许调相机/扫码接口；非 0 提示用户去系统设置授权。拒绝后**不得静默重试**。
+- 补充：单纯"拍摄一张"场景优先用 `@kit.CameraKit` 的 `cameraPicker.pick()` —— 系统 picker **免 CAMERA 权限**（等同 PhotoPicker）；仅"相机实时预览 + 逐帧处理"才必须走 createCameraInput 全量授权。扫一扫 `@hms.core.scan.scanBarcode.startScanForResult` 为系统扫码 UI，d.ts 无 @permission 标注（系统接管），稳妥做法仍是先声明 CAMERA、由系统页处理；相册图 `detectBarcode` 无需相机权限。
+- ⚠️ 隐私政策维护：一旦加 CAMERA，`resources/rawfile/privacy-policy.html`「权限说明」与 `AppScope/privacy.json` 须同步声明该权限用途。

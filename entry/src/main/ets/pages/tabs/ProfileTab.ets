@@ -3,9 +3,7 @@ import { GlassButton } from '../../components/GlassButton';
 import { bundleManager, common } from '@kit.AbilityKit';
 import { DarkModeStore } from '../../utils/DarkModeStore';
 import { mlOptions } from '../../components/MLOptionsSwitch';
-import { AutoCategorizer } from '../../utils/AutoCategorizer';
-import { RuleCategorizer } from '../../utils/RuleCategorizer';
-import { getBillClassifier } from '../../utils/ml/BillClassifier';
+import { activateMLIfEnabled, deactivateML } from '../../utils/MlActivation';
 import { Suggestion } from '../../model/RecordModel';
 import { datasetExportUtil, TrainingRecord } from '../../utils/DatasetExportUtil';
 import { saveSandboxFile } from '../../utils/PickerSaveUtils';
@@ -32,24 +30,10 @@ export struct ProfileTab {
       await mlOptions.init(ctx);
       this.mlEnabled = mlOptions.isEnabled();
       if (this.mlEnabled) {
-        await this.activateML(ctx);
+        await activateMLIfEnabled(ctx);
       }
     } catch (err) {
       console.error('loadMlState failed', JSON.stringify(err));
-    }
-  }
-
-  private async activateML(ctx: common.Context): Promise<void> {
-    try {
-      await getBillClassifier().init(ctx);
-      if (getBillClassifier().isLoaded()) {
-        AutoCategorizer.setEnhance(RuleCategorizer.mlEnhance);
-      } else {
-        AutoCategorizer.setEnhance(null);
-      }
-    } catch (err) {
-      console.error('ML classifier init failed', JSON.stringify(err));
-      AutoCategorizer.setEnhance(null);
     }
   }
 
@@ -75,9 +59,9 @@ export struct ProfileTab {
       await mlOptions.init(ctx);
       await mlOptions.setEnabled(isOn);
       if (isOn) {
-        await this.activateML(ctx);
+        await activateMLIfEnabled(ctx);
       } else {
-        AutoCategorizer.setEnhance(null);
+        await deactivateML();
       }
     } catch (err) {
       console.error('onToggleML failed', JSON.stringify(err));
@@ -178,9 +162,15 @@ export struct ProfileTab {
 
       Column({ space: 0 }) {
         Row() {
-          Text('智能分类')
-            .fontSize(15)
-            .fontColor(this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
+          Column({ space: 2 }) {
+            Text('智能分类')
+              .fontSize(15)
+              .fontColor(this.dark ? GlassTokens.TEXT_DARK : GlassTokens.TEXT_LIGHT)
+            Text('图片记账始终启用端侧智能分类')
+              .fontSize(11)
+              .fontColor(this.dark ? '#A9A9B5' : '#6B6B76')
+          }
+          .alignItems(HorizontalAlign.Start)
           Blank()
           Toggle({ type: ToggleType.Switch, isOn: this.mlEnabled })
             .onChange((isOn: boolean) => {

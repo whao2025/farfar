@@ -17,6 +17,7 @@ export async function pickImagesToSandbox(context: common.Context, max: number =
   const options = new photoAccessHelper.PhotoSelectOptions();
   options.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE;
   options.maxSelectNumber = max;
+  options.isPhotoTakingSupported = true;
   let result: photoAccessHelper.PhotoSelectResult;
   try {
     result = await picker.select(options);
@@ -77,22 +78,23 @@ export async function ocrImagesToText(paths: string[]): Promise<string> {
     let all: string = '';
     for (let i = 0; i < paths.length; i++) {
       try {
-        const text = await recognizeImageWithPreprocess(paths[i]);
+        const text = await recognizeImageWithPreprocess(paths[i], i + 1);
         if (text.trim().length > 0) {
-          all += text;
-          if (i < paths.length - 1) {
-            all += '\n';
+          if (all.length > 0) {
+            all += '\n--- 第 ' + (i + 1) + ' 页 ---\n';
           }
+          all += text;
         }
       } catch (err) {
         console.error('ocr image failed idx=' + i, JSON.stringify(err));
       }
     }
+    console.log('BookOcr recognized text:', all.trim());
     return all.trim();
   });
 }
 
-async function recognizeImageWithPreprocess(filePath: string): Promise<string> {
+async function recognizeImageWithPreprocess(filePath: string, pageNo: number): Promise<string> {
   const source = await image.createImageSource(filePath);
   try {
     const pm = await source.createPixelMap();
@@ -100,10 +102,10 @@ async function recognizeImageWithPreprocess(filePath: string): Promise<string> {
       const up = await upscalePixelMap(pm);
       let text = '';
       if (up) {
-        text = await recognizeOnce(up);
+        text = await recognizeOnce(up, pageNo);
         up.release();
       }
-      const text2 = await recognizeOnce(pm);
+      const text2 = await recognizeOnce(pm, pageNo);
       if (text.length === 0) {
         return text2;
       }
@@ -133,12 +135,35 @@ async function upscalePixelMap(pm: image.PixelMap): Promise<image.PixelMap | nul
   }
 }
 
-async function recognizeOnce(pm: image.PixelMap): Promise<string> {
+async function recognizeOnce(pm: image.PixelMap, pageNo: number): Promise<string> {
   const config: textRecognition.TextRecognitionConfiguration = {
     isDirectionDetectionSupported: true
   };
   try {
     const res = await textRecognition.recognizeText({ pixelMap: pm }, config);
+    if (res.blocks && res.blocks.length > 0) {
+      // 逐行抽取（blocks → lines → value），保行保序，供 AmountParser 按行解析
+      const parts: string[] = [];
+      for (let i = 0; i < res.blocks.length; i++) {
+        const blk = res.blocks[i];
+        if (!blk.lines) {
+          continue;
+        }
+        const blkLines: string[] = [];
+        for (let j = 0; j < blk.lines.length; j++) {
+          const v = blk.lines[j].value;
+          if (v.trim().length > 0) {
+            blkLines.push(v);
+          }
+        }
+        if (blkLines.length > 0) {
+          // 块边界插页标记：一图多账单/多图隔离，AmountParser 遇到即重置跨行上下文
+          parts.push('--- 第 ' + pageNo + ' 页 ---');
+          parts.push(blkLines.join('\n'));
+        }
+      }
+      return parts.length > 0 ? parts.join('\n') : (res.value ?? '');
+    }
     return res.value ?? '';
   } catch (err) {
     console.error('recognizeText failed', JSON.stringify(err));
