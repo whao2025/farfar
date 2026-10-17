@@ -5,7 +5,8 @@ import { image } from '@kit.ImageKit';
 import { runOcrSession } from './OcrLock';
 import { mergeUniqueLines } from './BookOcr';
 
-const OCR_SCALE = 2;
+// 扫描件 OCR：3 倍高清渲染（上限 4096px），配合彩色/灰度双路与行级合并提升准确率
+const OCR_SCALE = 3;
 const OCR_MAX_DIM = 4096;
 
 export interface OCRLineInfo {
@@ -115,39 +116,54 @@ export async function ocrPdfAsync(pdfPath: string): Promise<string> {
 /**
  * 高清渲染页面后识别。优先彩色高清，空白时退灰度重试，两路结果并集去重。
  */
+function normalizeOcrText(text: string): string {
+  let t = text.replace(/\u200B/g, '').replace(/\uFEFF/g, '');
+  // 中文之间误插的空格去掉（OCR 常见问题）
+  for (let i = 0; i < 3; i++) {
+    t = t.replace(/([\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef])\s+([\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef])/g, '$1$2');
+  }
+  t = t.replace(/[ \t]{2,}/g, ' ');
+  t = t.replace(/\n{3,}/g, '\n\n');
+  return t.trim();
+}
+
+async function recognizeOnce(page: pdfService.PdfPage, w: number, h: number, scale: number,
+  isGray: boolean, config: textRecognition.TextRecognitionConfiguration): Promise<string> {
+  const pm = renderPage(page, w, h, scale, isGray);
+  if (!pm) {
+    return '';
+  }
+  try {
+    const res = await textRecognition.recognizeText({ pixelMap: pm }, config);
+    return res.value ?? '';
+  } catch (err) {
+    console.error('ocr recognizeText failed', JSON.stringify(err));
+    return '';
+  } finally {
+    pm.release();
+  }
+}
+
+/**
+ * 多路 OCR：彩色高清为主；文字过短（空白页/低对比）时自动再跑灰度并做行级合并。
+ * 目标：清晰扫描件字符级准确率 ≥99%，低质扫描尽量 90%+。
+ */
 async function recognizePageHiRes(page: pdfService.PdfPage, config: textRecognition.TextRecognitionConfiguration): Promise<string> {
   const w = page.getWidth();
   const h = page.getHeight();
   if (w <= 0 || h <= 0) {
     return '';
   }
-  const s = calcSafeScale(w, h);
-  const color = renderPage(page, w, h, s, false);
-  if (color) {
-    try {
-      const res = await textRecognition.recognizeText({ pixelMap: color }, config);
-      const value = res.value ?? '';
-      if (value.trim().length > 0) {
-        return value;
-      }
-      const gray = renderPage(page, w, h, s, true);
-      if (gray) {
-        try {
-          const res2 = await textRecognition.recognizeText({ pixelMap: gray }, config);
-          return mergeUniqueLines(value, res2.value ?? '');
-        } finally {
-          gray.release();
-        }
-      }
-      return '';
-    } catch (err) {
-      console.error('ocr recognizeText failed', JSON.stringify(err));
-      return '';
-    } finally {
-      color.release();
-    }
+  const scale = calcSafeScale(w, h);
+  const colorText = await recognizeOnce(page, w, h, scale, false, config);
+  if (colorText.trim().length >= 30) {
+    return normalizeOcrText(colorText);
   }
-  return '';
+  const grayText = await recognizeOnce(page, w, h, scale, true, config);
+  if (grayText.trim().length === 0) {
+    return normalizeOcrText(colorText);
+  }
+  return normalizeOcrText(mergeUniqueLines(colorText, grayText));
 }
 
 function calcSafeScale(w: number, h: number): number {
