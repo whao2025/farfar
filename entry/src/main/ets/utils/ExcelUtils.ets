@@ -261,7 +261,7 @@ export async function pickAndReadXlsxRows(context: common.Context): Promise<stri
   try {
     const opts = new picker.DocumentSelectOptions();
     opts.maxSelectNumber = 1;
-    opts.fileSuffixFilters = ['.xlsx', '.xls'];
+    opts.fileSuffixFilters = ['.xlsx'];
     const uris: Array<string> = await new picker.DocumentViewPicker(context).select(opts);
     if (!uris || uris.length === 0) return [];
     const srcPath = context.filesDir + '/import_' + Date.now() + '.xlsx';
