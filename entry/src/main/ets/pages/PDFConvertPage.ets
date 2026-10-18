@@ -13,6 +13,8 @@ import { extractTextWithOCRFallback, isAllPageMarkers } from '../utils/PDFOCRUti
 import { saveSandboxFile } from '../utils/PickerSaveUtils';
 import { pickAndCopyPDF } from '../utils/PDFImportUtils';
 import { pdfToDocxAsync, docxToPdfAsync, pickAndCopyDocx } from '../utils/WordConvertUtils';
+import { readXlsxTable } from '../utils/ExcelUtils';
+import { tableToPdfAsync } from '../utils/TablePdfUtils';
 
 interface ConvertPageParams {
   mode?: string;
@@ -55,6 +57,9 @@ struct PDFConvertPage {
     if (this.mode === 'wordToPdf') {
       return 'Word 转 PDF';
     }
+    if (this.mode === 'excelToPdf') {
+      return 'Excel 表格转 PDF';
+    }
     return 'PDF 转图片';
   }
 
@@ -73,6 +78,9 @@ struct PDFConvertPage {
     }
     if (this.mode === 'wordToPdf') {
       return '选择 Word(.docx)，按段落生成 PDF（纯本地）';
+    }
+    if (this.mode === 'excelToPdf') {
+      return '识别 Excel 表格（自动定位表头/列宽/分页），生成带边框的 PDF';
     }
     return '将 PDF 每页导出为 PNG 图片';
   }
@@ -101,6 +109,34 @@ struct PDFConvertPage {
       this.runPdfToWord(context);
     } else if (this.mode === 'wordToPdf') {
       this.runWordToPdf(context);
+    } else if (this.mode === 'excelToPdf') {
+      this.runExcelToPdf(context);
+    }
+  }
+
+  private async runExcelToPdf(context: common.Context): Promise<void> {
+    try {
+      this.statusMsg = '读取并识别表格…';
+      const table = await readXlsxTable(context);
+      if (!table) {
+        this.showToast('未读取到表格内容');
+        this.busy = false;
+        return;
+      }
+      this.statusMsg = ('识别到 ' + table.rows.length + ' 行 × ' + table.cols + ' 列，生成 PDF…') as string;
+      const pdfPath = await tableToPdfAsync(context, table);
+      if (!pdfPath) {
+        this.showToast('表格转 PDF 失败');
+        this.busy = false;
+        return;
+      }
+      const saved = await saveSandboxFile(context, pdfPath, 'excel_table.pdf', '.pdf');
+      this.showToast(saved ? ('已导出 PDF（' + table.rows.length + ' 行）') as string : '已生成，未选择导出位置');
+    } catch (err) {
+      console.error('excelToPdf failed', JSON.stringify(err));
+      this.showToast('转换失败');
+    } finally {
+      this.busy = false;
     }
   }
 

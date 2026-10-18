@@ -230,15 +230,20 @@ export function xlsxRowsToBookkeepingText(rows: string[][]): string {
   let typeCol = findCol(header, TYPE_HEADERS);
   const start = headerIdx >= 0 ? headerIdx + 1 : 0;
   if (amountCol < 0) {
-    // 无表头：猜金额列（数值最多的列）
-    let best = -1; let bestCount = 0;
-    for (let c = 0; c < 12; c++) {
-      let cnt = 0;
-      for (let r = start; r < Math.min(rows.length, start + 20); r++) {
-        const v = (rows[r][c] ?? '').replace(/[,¥￥\s]/g, '');
+    // 无金额表头：仅当某列"有小数/货币符号"证据且不是编号/学号列时才猜测，否则视为非账单表
+    let best = -1; let bestScore = 0;
+    for (let c = 0; c < 16; c++) {
+      const h = header.length > c ? header[c].toLowerCase() : '';
+      if (/编号|序号|学号|工号|电话|手机|id/.test(h)) continue;
+      let cnt = 0; let decimal = 0;
+      for (let r = start; r < Math.min(rows.length, start + 30); r++) {
+        const raw = (rows[r][c] ?? '').trim();
+        const v = raw.replace(/[,¥￥\s]/g, '');
         if (/^-?\d+(\.\d+)?$/.test(v)) cnt++;
+        if (v.indexOf('.') >= 0 || /[¥￥]/.test(raw)) decimal++;
       }
-      if (cnt > bestCount) { bestCount = cnt; best = c; }
+      const score = decimal * 3 + cnt;
+      if (decimal > 0 && score > bestScore) { bestScore = score; best = c; }
     }
     amountCol = best;
   }
@@ -306,6 +311,54 @@ function listSheetTargets(unzipDir: string): string[] {
   }
   if (out.length === 0) out.push('worksheets/sheet1.xml');
   return out;
+}
+
+export interface TableData {
+  headerRow: number;
+  rows: string[][];
+  cols: number;
+}
+
+function detectHeaderRow(rows: string[][]): number {
+  let best = -1; let bestScore = 0;
+  for (let i = 0; i < Math.min(10, rows.length); i++) {
+    const row = rows[i];
+    let nonEmpty = 0; let shortText = 0; let numeric = 0;
+    const uniq: string[] = [];
+    for (const cell of row) {
+      const t = cell.trim();
+      if (t.length === 0) continue;
+      nonEmpty++;
+      if (t.length <= 30) shortText++;
+      if (/^-?\d+(\.\d+)?$/.test(t)) numeric++;
+      if (uniq.indexOf(t) < 0) uniq.push(t);
+    }
+    if (nonEmpty < 2) continue;
+    let score = nonEmpty * 2 + shortText + uniq.length;
+    if (numeric === nonEmpty) score -= 8;
+    if (i === 0) score += 2;
+    if (score > bestScore) { bestScore = score; best = i; }
+  }
+  if (best < 0) best = 0;
+  return best;
+}
+
+export async function readXlsxTable(context: common.Context): Promise<TableData | null> {
+  const rows = await pickAndReadXlsxRows(context);
+  if (rows.length === 0) return null;
+  const headerRow = detectHeaderRow(rows);
+  let cols = 0;
+  for (const r of rows) {
+    if (r.length > cols) cols = r.length;
+  }
+  if (cols === 0) return null;
+  const norm: string[][] = [];
+  for (const r of rows) {
+    const line: string[] = [];
+    for (let c = 0; c < cols; c++) line.push((r[c] ?? '').trim());
+    norm.push(line);
+  }
+  return { headerRow: headerRow, rows: norm, cols: cols };
 }
 
 export async function pickAndReadXlsxRows(context: common.Context): Promise<string[][]> {
