@@ -4,7 +4,10 @@ import { BudgetCard } from '../../components/BudgetCard';
 import { TrendCard } from '../../components/TrendCard';
 import { recordDb } from '../../utils/RecordDatabase';
 import { budgetPrefs } from '../../utils/BudgetPreferences';
-import { BookkeepingRecord, WeekDaySpending, CategoryStat } from '../../model/RecordModel';
+import { BookkeepingRecord, WeekDaySpending, CategoryStat, RecordStatus } from '../../model/RecordModel';
+import { GlassButton } from '../../components/GlassButton';
+import { exportRecordsToXlsx, pickAndReadXlsxRows, xlsxRowsToBookkeepingText } from '../../utils/ExcelUtils';
+import { saveSandboxFile } from '../../utils/PickerSaveUtils';
 import { activateMLIfEnabled } from '../../utils/MlActivation';
 
 @Component
@@ -18,6 +21,7 @@ export struct BookkeepingTab {
   @State lastMonthExpense: number = 0;
   @State weekData: WeekDaySpending[] = [];
   @State categoryStats: CategoryStat[] = [];
+  @State excelBusy: boolean = false;
 
   aboutToAppear() {
     const ctx = this.getUIContext().getHostContext();
@@ -34,6 +38,64 @@ export struct BookkeepingTab {
 
   private onRefreshTick(): void {
     this.loadStats();
+  }
+
+  private async onImportExcel(): Promise<void> {
+    if (this.excelBusy) {
+      return;
+    }
+    const host = this.getUIContext().getHostContext();
+    if (!host) {
+      return;
+    }
+    this.excelBusy = true;
+    try {
+      const rows = await pickAndReadXlsxRows(host as common.Context);
+      if (rows.length === 0) {
+        this.getUIContext().getPromptAction().showToast({ message: '未读取到表格内容' });
+        return;
+      }
+      const text = xlsxRowsToBookkeepingText(rows);
+      if (text.length === 0) {
+        this.getUIContext().getPromptAction().showToast({ message: '未识别到金额行，请检查表格' });
+        return;
+      }
+      this.getUIContext().getRouter().pushUrl({
+        url: 'pages/BookkeepingConfirmPage',
+        params: { source: 'excel', text: text, mode: 'full' }
+      });
+    } catch (err) {
+      console.error('import excel failed', JSON.stringify(err));
+      this.getUIContext().getPromptAction().showToast({ message: 'Excel 导入失败' });
+    } finally {
+      this.excelBusy = false;
+    }
+  }
+
+  private async onExportExcel(): Promise<void> {
+    const host = this.getUIContext().getHostContext();
+    if (!host) {
+      return;
+    }
+    const ctx = host as common.Context;
+    try {
+      await recordDb.init(ctx);
+      const records = await recordDb.getAll(RecordStatus.CONFIRMED);
+      if (records.length === 0) {
+        this.getUIContext().getPromptAction().showToast({ message: '暂无已确认记录' });
+        return;
+      }
+      const path = await exportRecordsToXlsx(ctx, records);
+      if (!path) {
+        this.getUIContext().getPromptAction().showToast({ message: '导出失败' });
+        return;
+      }
+      const saved = await saveSandboxFile(ctx, path, 'freepdf记账.xlsx', '.xlsx');
+      this.getUIContext().getPromptAction().showToast({ message: saved ? '已导出 Excel' : '已生成，未选择导出位置' });
+    } catch (err) {
+      console.error('export excel failed', JSON.stringify(err));
+      this.getUIContext().getPromptAction().showToast({ message: '导出失败' });
+    }
   }
 
   private async loadBudget(): Promise<void> {
@@ -186,6 +248,26 @@ export struct BookkeepingTab {
     Column({ space: 16 }) {
       Scroll() {
         Column({ space: 16 }) {
+          Row({ space: 10 }) {
+            GlassButton({
+              label: this.excelBusy ? '处理中…' : '导入 Excel',
+              dark: this.dark,
+              heightVp: 40,
+              fontSize: 14,
+              onClickHandler: () => this.onImportExcel()
+            })
+              .layoutWeight(1)
+            GlassButton({
+              label: '导出 Excel',
+              dark: this.dark,
+              heightVp: 40,
+              fontSize: 14,
+              onClickHandler: () => this.onExportExcel()
+            })
+              .layoutWeight(1)
+          }
+          .width('100%')
+
           BudgetCard({
             monthlyBudget: this.monthlyBudget,
             dailyBudget: Math.round(this.monthlyBudget / 30),

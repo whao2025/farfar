@@ -9,7 +9,7 @@ export enum RecordStatus {
 
 export type RecordType = 'expense' | 'income';
 
-export type RecordSource = 'pdf-text' | 'pdf-ocr' | 'img-ocr';
+export type RecordSource = 'pdf-text' | 'pdf-ocr' | 'img-ocr' | 'excel';
 
 export type BudgetType = 'daily' | 'weekly' | 'monthly';
 
