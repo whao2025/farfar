@@ -108,6 +108,8 @@ export struct ConvertTab {
         Row({ space: 10 }) {
           GlassButton({ label: 'Excel转PDF', dark: this.dark, heightVp: 44, fontSize: 14, onClickHandler: () => this.openConvert('excelToPdf') })
             .layoutWeight(1)
+          GlassButton({ label: 'Excel转Word', dark: this.dark, heightVp: 44, fontSize: 14, onClickHandler: () => this.openConvert('excelToWord') })
+            .layoutWeight(1)
         }
         .width('100%')
       }

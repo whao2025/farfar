@@ -15,6 +15,7 @@ import { pickAndCopyPDF } from '../utils/PDFImportUtils';
 import { pdfToDocxAsync, docxToPdfAsync, pickAndCopyDocx } from '../utils/WordConvertUtils';
 import { readXlsxTable } from '../utils/ExcelUtils';
 import { tableToPdfAsync } from '../utils/TablePdfUtils';
+import { tableToDocxAsync } from '../utils/TableDocxUtils';
 
 interface ConvertPageParams {
   mode?: string;
@@ -60,6 +61,9 @@ struct PDFConvertPage {
     if (this.mode === 'excelToPdf') {
       return 'Excel 表格转 PDF';
     }
+    if (this.mode === 'excelToWord') {
+      return 'Excel 表格转 Word';
+    }
     return 'PDF 转图片';
   }
 
@@ -81,6 +85,9 @@ struct PDFConvertPage {
     }
     if (this.mode === 'excelToPdf') {
       return '识别 Excel 表格（自动定位表头/列宽/分页），生成带边框的 PDF';
+    }
+    if (this.mode === 'excelToWord') {
+      return '识别 Excel 表格，生成 Word 真表格（可继续编辑、表头跨页重复）';
     }
     return '将 PDF 每页导出为 PNG 图片';
   }
@@ -111,6 +118,34 @@ struct PDFConvertPage {
       this.runWordToPdf(context);
     } else if (this.mode === 'excelToPdf') {
       this.runExcelToPdf(context);
+    } else if (this.mode === 'excelToWord') {
+      this.runExcelToWord(context);
+    }
+  }
+
+  private async runExcelToWord(context: common.Context): Promise<void> {
+    try {
+      this.statusMsg = '读取并识别表格…';
+      const table = await readXlsxTable(context);
+      if (!table) {
+        this.showToast('未读取到表格内容');
+        this.busy = false;
+        return;
+      }
+      this.statusMsg = ('识别到 ' + table.rows.length + ' 行 × ' + table.cols + ' 列，生成 Word 表格…') as string;
+      const docxPath = await tableToDocxAsync(context, table);
+      if (!docxPath) {
+        this.showToast('表格转 Word 失败');
+        this.busy = false;
+        return;
+      }
+      const saved = await saveSandboxFile(context, docxPath, 'excel_table.docx', '.docx');
+      this.showToast(saved ? ('已导出 Word（' + table.rows.length + ' 行）') as string : '已生成，未选择导出位置');
+    } catch (err) {
+      console.error('excelToWord failed', JSON.stringify(err));
+      this.showToast('转换失败');
+    } finally {
+      this.busy = false;
     }
   }
 

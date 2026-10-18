@@ -148,11 +148,19 @@ function excelSerialToDate(serial: number): string {
   const d = new Date(ms);
   return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
 }
+function colIndex(letters: string): number {
+  let v = 0;
+  for (let i = 0; i < letters.length; i++) v = v * 26 + (letters.charCodeAt(i) - 64);
+  return v - 1;
+}
 function parseSheetRows(xml: string, shared: string[]): string[][] {
-  const rows: string[][] = [];
+  const rowNums: number[] = [];
+  const rowMap: Map<number, string[]> = new Map<number, string[]>();
   const rowRe = /<row[^>]*>([\s\S]*?)<\/row>/g;
   let rm: RegExpExecArray | null = rowRe.exec(xml);
   while (rm !== null) {
+    const rowNumM = rm[0].match(/<row[^>]*r="(\d+)"/);
+    const rowNum = rowNumM ? parseInt(rowNumM[1], 10) : rowNums.length + 1;
     const cells: string[] = [];
     const cellRe = /<c([^>]*)>([\s\S]*?)<\/c>/g;
     let cm: RegExpExecArray | null = cellRe.exec(rm[1]);
@@ -161,11 +169,7 @@ function parseSheetRows(xml: string, shared: string[]): string[][] {
       const body = cm[2];
       const refM = attrs.match(/r="([A-Z]+)(\d+)"/);
       let col = cells.length;
-      if (refM) {
-        let v = 0;
-        for (let i = 0; i < refM[1].length; i++) v = v * 26 + (refM[1].charCodeAt(i) - 64);
-        col = v - 1;
-      }
+      if (refM) col = colIndex(refM[1]);
       let value = '';
       if (attrs.indexOf('t="s"') >= 0) {
         const vm = body.match(/<v>(\d+)<\/v>/);
@@ -185,10 +189,60 @@ function parseSheetRows(xml: string, shared: string[]): string[][] {
       cells[col] = value.trim();
       cm = cellRe.exec(rm[1]);
     }
-    if (cells.join('').trim().length > 0) rows.push(cells);
+    rowMap.set(rowNum, cells);
+    rowNums.push(rowNum);
     rm = rowRe.exec(xml);
   }
-  return rows;
+  // 合并单元格：把左上角值填充到整个合并区域（标题行/多行表头常见）
+  const mergeRe = /<mergeCell ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"/g;
+  let mm: RegExpExecArray | null = mergeRe.exec(xml);
+  while (mm !== null) {
+    const c1 = colIndex(mm[1]);
+    const r1 = parseInt(mm[2], 10);
+    const c2 = colIndex(mm[3]);
+    const r2 = parseInt(mm[4], 10);
+    const anchor = rowMap.get(r1);
+    const value = anchor && c1 < anchor.length ? anchor[c1] : '';
+    if (value.length > 0) {
+      for (let r = r1; r <= r2; r++) {
+        let row = rowMap.get(r);
+        if (!row) { row = []; rowMap.set(r, row); rowNums.push(r); }
+        while (row.length <= c2) row.push('');
+        for (let c = c1; c <= c2; c++) {
+          if (row[c].length === 0) row[c] = value;
+        }
+      }
+    }
+    mm = mergeRe.exec(xml);
+  }
+  rowNums.sort((a: number, b: number) => a - b);
+  const out: string[][] = [];
+  const seen: number[] = [];
+  for (const r of rowNums) {
+    if (seen.indexOf(r) >= 0) continue;
+    seen.push(r);
+    const cells = rowMap.get(r) ?? [];
+    let has = false;
+    for (const c of cells) { if (c.length > 0) { has = true; break; } }
+    if (has) out.push(cells);
+  }
+  return out;
+}
+function trimEmptyCols(rows: string[][]): string[][] {
+  let maxCol = 0;
+  for (const r of rows) {
+    for (let c = 0; c < r.length; c++) {
+      if (r[c].length > 0 && c + 1 > maxCol) maxCol = c + 1;
+    }
+  }
+  if (maxCol === 0) return rows;
+  const out: string[][] = [];
+  for (const r of rows) {
+    const line: string[] = [];
+    for (let c = 0; c < maxCol; c++) line.push(c < r.length ? r[c] : '');
+    out.push(line);
+  }
+  return out;
 }
 const DATE_HEADERS = ['日期', '时间', 'date', 'time', '月份', '期间', '发放日期'];
 const AMOUNT_HEADERS = ['金额', 'amount', '费用', 'money', '价格', '价税合计', '酬劳', '报酬', '工资', '薪', '劳务', '应发', '实发', '到账'];
@@ -418,7 +472,7 @@ export async function pickAndReadXlsxRows(context: common.Context): Promise<stri
     if (best.length === 0 && targets.length === 0) {
       try { best = parseSheetRows(readFileText(unzipDir + '/xl/worksheets/sheet1.xml'), shared); } catch (e) {}
     }
-    return best;
+    return trimEmptyCols(best);
   } catch (err) {
     console.error('pickAndReadXlsxRows failed', JSON.stringify(err));
     return [];
