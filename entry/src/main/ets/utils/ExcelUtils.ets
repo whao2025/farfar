@@ -190,10 +190,12 @@ function parseSheetRows(xml: string, shared: string[]): string[][] {
   }
   return rows;
 }
-const DATE_HEADERS = ['日期', '时间', 'date', 'time'];
-const AMOUNT_HEADERS = ['金额', 'amount', '支出', '收入', '费用', 'money', '价格', '价税合计'];
-const MERCHANT_HEADERS = ['商户', '商家', 'merchant', '对方', '交易对象', '收款方', '店铺'];
-const NOTE_HEADERS = ['备注', '摘要', '说明', '商品', '描述', 'note', 'memo', '用途'];
+const DATE_HEADERS = ['日期', '时间', 'date', 'time', '月份', '期间', '发放日期'];
+const AMOUNT_HEADERS = ['金额', 'amount', '费用', 'money', '价格', '价税合计', '酬劳', '报酬', '工资', '薪', '劳务', '应发', '实发', '到账'];
+const INCOME_HEADERS = ['收入', '入账', '进账', 'income', '收款'];
+const EXPENSE_HEADERS = ['支出', '消费', '花销', 'expense', '付款'];
+const MERCHANT_HEADERS = ['商户', '商家', 'merchant', '对方', '交易对象', '收款方', '店铺', '姓名', '学生', '人员', '员工', '客户'];
+const NOTE_HEADERS = ['备注', '摘要', '说明', '商品', '描述', 'note', 'memo', '用途', '事由', '项目'];
 const TYPE_HEADERS = ['类型', '收支', 'type', '方向'];
 function findCol(header: string[], keys: string[]): number {
   for (let i = 0; i < header.length; i++) {
@@ -209,7 +211,8 @@ export function xlsxRowsToBookkeepingText(rows: string[][]): string {
   if (rows.length === 0) return '';
   let headerIdx = -1;
   for (let i = 0; i < Math.min(6, rows.length); i++) {
-    if (findCol(rows[i], DATE_HEADERS) >= 0 || findCol(rows[i], AMOUNT_HEADERS) >= 0) {
+    if (findCol(rows[i], DATE_HEADERS) >= 0 || findCol(rows[i], AMOUNT_HEADERS) >= 0 ||
+        findCol(rows[i], INCOME_HEADERS) >= 0 || findCol(rows[i], EXPENSE_HEADERS) >= 0) {
       headerIdx = i;
       break;
     }
@@ -217,6 +220,11 @@ export function xlsxRowsToBookkeepingText(rows: string[][]): string {
   const header = headerIdx >= 0 ? rows[headerIdx] : [];
   let dateCol = findCol(header, DATE_HEADERS);
   let amountCol = findCol(header, AMOUNT_HEADERS);
+  let incomeCol = findCol(header, INCOME_HEADERS);
+  let expenseCol = findCol(header, EXPENSE_HEADERS);
+  if (incomeCol < 0 && expenseCol < 0 && amountCol >= 0 && findCol(header, ['金额']) === amountCol) {
+    // 普通"金额"列保持单列处理
+  }
   let merchantCol = findCol(header, MERCHANT_HEADERS);
   let noteCol = findCol(header, NOTE_HEADERS);
   let typeCol = findCol(header, TYPE_HEADERS);
@@ -237,15 +245,30 @@ export function xlsxRowsToBookkeepingText(rows: string[][]): string {
   let text = '';
   for (let r = start; r < rows.length; r++) {
     const row = rows[r];
-    const amountRaw = amountCol >= 0 ? (row[amountCol] ?? '') : '';
-    if (!/\d/.test(amountRaw)) continue;
     const joined = row.join(' ');
-    if (/合计|总计|小计|余额|汇总/.test(joined)) continue;
+    if (/合计|总计|小计|余额|汇总|平均/.test(joined)) continue;
+    let amountRaw = amountCol >= 0 ? (row[amountCol] ?? '') : '';
+    let side = '';
+    if (incomeCol >= 0) {
+      const iv = (row[incomeCol] ?? '').replace(/[¥￥,\s]/g, '');
+      if (/^-?\d+(\.\d+)?$/.test(iv) && parseFloat(iv) !== 0) {
+        amountRaw = iv;
+        side = '收入';
+      }
+    }
+    if (expenseCol >= 0 && side.length === 0) {
+      const ev = (row[expenseCol] ?? '').replace(/[¥￥,\s]/g, '');
+      if (/^-?\d+(\.\d+)?$/.test(ev) && parseFloat(ev) !== 0) {
+        amountRaw = ev;
+        side = '支出';
+      }
+    }
+    if (!/\d/.test(amountRaw)) continue;
     let date = dateCol >= 0 ? (row[dateCol] ?? '') : '';
     if (dateCol >= 0 && /^\d+(\.\d+)?$/.test(date)) date = excelSerialToDate(parseFloat(date));
     const merchant = merchantCol >= 0 ? (row[merchantCol] ?? '') : '';
     const note = noteCol >= 0 ? (row[noteCol] ?? '') : '';
-    const type = typeCol >= 0 ? (row[typeCol] ?? '') : '';
+    const type = side.length > 0 ? side : (typeCol >= 0 ? (row[typeCol] ?? '') : '');
     let line = '';
     if (date.length > 0) line += date + ' ';
     if (type.length > 0) line += type + ' ';
@@ -256,6 +279,35 @@ export function xlsxRowsToBookkeepingText(rows: string[][]): string {
   }
   return text.trim();
 }
+function listSheetTargets(unzipDir: string): string[] {
+  const out: string[] = [];
+  try {
+    const wb = readFileText(unzipDir + '/xl/workbook.xml');
+    const rels = readFileText(unzipDir + '/xl/_rels/workbook.xml.rels');
+    const relMap: Map<string, string> = new Map<string, string>();
+    const relRe = /<Relationship[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"/g;
+    let rm: RegExpExecArray | null = relRe.exec(rels);
+    while (rm !== null) {
+      relMap.set(rm[1], rm[2]);
+      rm = relRe.exec(rels);
+    }
+    const sheetRe = /<sheet[^>]*r:id="([^"]+)"/g;
+    let sm: RegExpExecArray | null = sheetRe.exec(wb);
+    while (sm !== null) {
+      const target = relMap.get(sm[1]);
+      if (target) {
+        const t = target.charAt(0) === '/' ? target.substring(1) : 'worksheets/' + target.replace(/^.*\//, '');
+        out.push(target.charAt(0) === '/' ? target.replace(/^xl\//, '') : t);
+      }
+      sm = sheetRe.exec(wb);
+    }
+  } catch (e) {
+    out.length = 0;
+  }
+  if (out.length === 0) out.push('worksheets/sheet1.xml');
+  return out;
+}
+
 export async function pickAndReadXlsxRows(context: common.Context): Promise<string[][]> {
   const unzipDir = context.filesDir + '/xlsx_unzip_' + Date.now();
   try {
@@ -288,8 +340,32 @@ export async function pickAndReadXlsxRows(context: common.Context): Promise<stri
     } catch (e) {
       shared = [];
     }
-    const sheetXmlText = readFileText(unzipDir + '/xl/worksheets/sheet1.xml');
-    return parseSheetRows(sheetXmlText, shared);
+    // 读取 workbook 里所有 sheet，选择"数据最像账单"的一张（金额列命中优先、行数最多）
+    const targets = listSheetTargets(unzipDir);
+    let best: string[][] = [];
+    let bestScore = -1;
+    for (const t of targets) {
+      try {
+        const rows = parseSheetRows(readFileText(unzipDir + '/xl/' + t), shared);
+        if (rows.length === 0) continue;
+        let score = 0;
+        for (let i = 0; i < Math.min(6, rows.length); i++) {
+          if (findCol(rows[i], AMOUNT_HEADERS) >= 0 || findCol(rows[i], INCOME_HEADERS) >= 0 ||
+              findCol(rows[i], EXPENSE_HEADERS) >= 0) {
+            score += 50;
+            break;
+          }
+        }
+        score += Math.min(rows.length, 500);
+        if (score > bestScore) { bestScore = score; best = rows; }
+      } catch (e) {
+        continue;
+      }
+    }
+    if (best.length === 0 && targets.length === 0) {
+      try { best = parseSheetRows(readFileText(unzipDir + '/xl/worksheets/sheet1.xml'), shared); } catch (e) {}
+    }
+    return best;
   } catch (err) {
     console.error('pickAndReadXlsxRows failed', JSON.stringify(err));
     return [];
